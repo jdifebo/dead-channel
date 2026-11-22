@@ -1,10 +1,10 @@
 import { angleDelta, angleTo, clamp, distance, inside, move, Navigation, rayDistance, visible } from './geometry.ts';
-import type { Beam, Gate, Level, Patrol, Point, Rect, Station, Wall } from './level.ts';
+import type { Beam, Checkpoint, Gate, Level, Patrol, Point, Rect, Requirement, Sector, Station, Wall } from './level.ts';
 
 export type Phase = 'active' | 'escaped' | 'caught';
 export type GuardMode = 'patrol' | 'investigate' | 'chase';
-export type EventKind = 'step' | 'throw' | 'impact' | 'suspicion' | 'alarm' | 'quiet' | 'power' | 'objective' | 'scramble' | 'escaped' | 'caught';
-export interface MissionEvent { kind: EventKind; point?: Point; heavy?: boolean; message?: string }
+export type EventKind = 'step' | 'throw' | 'impact' | 'suspicion' | 'alarm' | 'quiet' | 'power' | 'objective' | 'evidence' | 'scramble' | 'checkpoint' | 'sector' | 'escaped' | 'caught';
+export interface MissionEvent { kind: EventKind; point?: Point; heavy?: boolean; message?: string; speaker?: string }
 export interface Input { x: number; z: number; sneak: boolean; sprint: boolean; interact: boolean; throwAt?: Point | true; scramble?: boolean }
 export interface Agent extends Point { angle: number; speed: number }
 export interface Guard extends Agent {
@@ -19,6 +19,10 @@ export interface Scramble extends Point { until: number }
 export type BeamState = { state: 'live' | 'clear' | 'scrambled' | 'offline'; remaining: number };
 export const scrambleRadius = 9;
 export const scrambleSeconds = 6.5;
+
+export interface CheckpointSave {
+  levelId: string; id: string; completed: string[]; elapsed: number; alerts: number; inventory: number; scramblers: number;
+}
 
 const GUARD_RANGE = 9.6;
 const CAMERA_RANGE = 11.2;
@@ -37,6 +41,7 @@ export class Mission {
   readonly noises: Noise[] = [];
   readonly events: MissionEvent[] = [];
   private readonly completed = new Set<string>();
+  private readonly offlineCircuits = new Set<string>();
   phase: Phase = 'active';
   elapsed = 0;
   stance: 'walk' | 'sneak' | 'sprint' = 'walk';
@@ -51,6 +56,10 @@ export class Mission {
   alarm = 0;
   alerts = 0;
   interaction: Interaction | undefined;
+  sector: Sector | undefined;
+  checkpoint: CheckpointSave | undefined;
+  continued = false;
+  exit: Station | undefined;
   sightWalls: Wall[] = [];
   private walkWalls: Rect[] = [];
   private guardWalls: Rect[] = [];
@@ -59,7 +68,7 @@ export class Mission {
   private stepDistance = 0;
   private suspected = false;
 
-  constructor(level: Level) {
+  constructor(level: Level, resume?: CheckpointSave) {
     this.level = level;
     this.scramblers = level.scramblers ?? 0;
     this.player = { ...level.start, angle: Math.PI, speed: 0 };
@@ -67,21 +76,43 @@ export class Mission {
       angle: angleTo(patrol.route[0], patrol.route[1]), speed: 0, awareness: 0, wait: patrol.delay ?? 0,
       destination: patrol.route[1], path: [], replan: 0, memory: 0 }));
     this.cameras = level.cameras.map(camera => ({ ...camera, awareness: 0, disabled: false }));
+    const checkpoint = resume?.levelId === level.id && level.checkpoints?.find(cp => cp.id === resume.id);
+    if (resume && checkpoint) {
+      this.continued = true;
+      this.checkpoint = resume;
+      this.player.x = checkpoint.x;
+      this.player.z = checkpoint.z;
+      this.elapsed = resume.elapsed;
+      this.alerts = resume.alerts;
+      this.inventory = resume.inventory;
+      this.scramblers = resume.scramblers;
+      for (const station of level.stations) if (resume.completed.includes(station.id)) {
+        this.completed.add(station.id);
+        if (station.kind === 'power') this.cutPower(station.circuit);
+      }
+    }
+    this.sector = this.sectorAt(this.player);
     this.updateWalls();
   }
 
   get order() {
     const order = this.level.orders.find(step => !this.hasAll(step.until));
     if (!order) return 'Extraction complete';
-    const progress = order.until.length > 1 ? ` · ${order.until.filter(id => this.completed.has(id)).length}/${order.until.length}` : '';
+    const progress = order.until.length > 1 ? ` · ${order.until.filter(id => this.met(id)).length}/${order.until.length}` : '';
     return `${order.text}${progress}`;
   }
+
+  get notes() {
+    return this.level.stations.flatMap(station => station.evidence && this.completed.has(station.id) ? [station.evidence] : []);
+  }
+
+  sectorAt(point: Point) { return this.level.sectors?.find(sector => inside(point, sector.bounds, .001)); }
 
   // Retained for callers that track the original Salt Relay objective.
   get recording() { return this.completed.has('recording'); }
 
   stationState(station: Station) {
-    if (this.completed.has(station.id)) return 'done';
+    if (this.completed.has(station.id) || (station.excludes && this.completed.has(station.excludes))) return 'done';
     return this.hasAll(station.requires) ? 'ready' : 'locked';
   }
 
@@ -97,13 +128,23 @@ export class Mission {
   }
 
   beamState(beam: Beam): BeamState {
-    if (!this.cameraPower) return { state: 'offline', remaining: 0 };
+    if (!this.powered(beam.circuit)) return { state: 'offline', remaining: 0 };
     if (this.inScramble(beam)) return { state: 'scrambled', remaining: this.jam!.until - this.elapsed };
     const phase = (this.elapsed + beam.phase) % beam.period;
     return phase < beam.live ? { state: 'live', remaining: beam.live - phase } : { state: 'clear', remaining: beam.period - phase };
   }
 
-  private hasAll(ids?: string[]) { return ids?.every(id => this.completed.has(id)) ?? true; }
+  private met(requirement: Requirement) {
+    return typeof requirement === 'string' ? this.completed.has(requirement) : requirement.some(id => this.completed.has(id));
+  }
+
+  private hasAll(ids?: Requirement[]) { return ids?.every(id => this.met(id)) ?? true; }
+  private powered(circuit?: string) { return this.cameraPower && (!circuit || !this.offlineCircuits.has(circuit)); }
+
+  private cutPower(circuit?: string) {
+    if (circuit) this.offlineCircuits.add(circuit);
+    else this.cameraPower = false;
+  }
 
   private inScramble(point: Point) { return !!this.jam && distance(this.jam, point) <= scrambleRadius; }
 
@@ -143,7 +184,29 @@ export class Mission {
       this.suspected = true;
     }
     if (this.exposure < .08) this.suspected = false;
-    if (this.phase === 'active') this.updateInteraction(input.interact, dt);
+    if (this.phase === 'active') {
+      this.updateInteraction(input.interact, dt);
+      this.updateSector();
+    }
+  }
+
+  private updateSector() {
+    const sector = this.sectorAt(this.player);
+    if (sector && this.sector !== sector) {
+      this.sector = sector;
+      this.events.push({ kind: 'sector', message: sector.cue, speaker: sector.speaker });
+    }
+    const checkpoints = this.level.checkpoints;
+    if (!checkpoints) return;
+    const previous = checkpoints.findIndex(cp => cp.id === this.checkpoint?.id);
+    const next = checkpoints.find((cp, i) => i > previous && distance(this.player, cp) < 2.75 && this.hasAll(cp.requires));
+    if (next) this.saveCheckpoint(next);
+  }
+
+  private saveCheckpoint(checkpoint: Checkpoint) {
+    this.checkpoint = { levelId: this.level.id, id: checkpoint.id, completed: [...this.completed], elapsed: this.elapsed,
+      alerts: this.alerts, inventory: this.inventory, scramblers: this.scramblers };
+    this.events.push({ kind: 'checkpoint', message: checkpoint.label });
   }
 
   private movePlayer(input: Input, dt: number) {
@@ -208,7 +271,7 @@ export class Mission {
     if (range > 4) this.noises.push({ x: at.x, z: at.z, age: 0, range });
     if (decoy) this.events.push({ kind: 'impact', point: at });
     for (const guard of this.guards) {
-      if (guard.mode === 'chase') continue;
+      if (guard.mode === 'chase' || distance(at, guard) > range) continue;
       const reach = visible(at, guard, this.sightWalls) ? range : range * .5;
       if (distance(at, guard) <= reach) this.redirect(guard, at, 'investigate', decoy ? 6 : 3.5);
     }
@@ -224,7 +287,7 @@ export class Mission {
   private updateCameras(dt: number) {
     this.cameras.forEach((camera, i) => {
       const spec = this.level.cameras[i];
-      camera.disabled = !this.cameraPower || this.inScramble(camera);
+      camera.disabled = !this.powered(spec.circuit) || this.inScramble(camera);
       if (!camera.disabled) camera.angle = spec.angle + Math.sin(this.elapsed * .86 + spec.phase) * spec.sweep;
       const seesPlayer = !camera.disabled && this.sees(camera, CAMERA_RANGE, CAMERA_ANGLE, .3);
       camera.awareness = camera.disabled ? 0 : clamp(camera.awareness + (seesPlayer ? .99 : -.82) * dt, 0, 1);
@@ -328,13 +391,17 @@ export class Mission {
     const progress = held && !locked ? (this.interaction?.station === station ? this.interaction.progress : 0) + dt / station.seconds : 0;
     this.interaction = { station, progress, locked };
     if (progress < 1) return;
+    const closed = this.level.gates?.filter(gate => !this.gateOpen(gate));
     this.completed.add(station.id);
-    if (station.kind === 'power') this.cameraPower = false;
-    if (station.kind === 'extract') this.phase = 'escaped';
-    const opened = this.level.gates?.filter(gate => gate.requires.includes(station.id) && this.gateOpen(gate));
+    if (station.kind === 'power') this.cutPower(station.circuit);
+    if (station.kind === 'extract') {
+      this.phase = 'escaped';
+      this.exit = station;
+    }
+    const opened = closed?.filter(gate => this.gateOpen(gate));
     if (opened?.length) this.updateWalls();
     const message = opened?.find(gate => gate.radio)?.radio ?? station.radio;
-    this.events.push({ kind: station.kind === 'extract' ? 'escaped' : station.kind, message });
+    this.events.push({ kind: station.kind === 'extract' ? 'escaped' : station.kind, message, speaker: station.speaker });
     this.interaction = undefined;
   }
 }

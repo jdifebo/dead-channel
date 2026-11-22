@@ -4,26 +4,29 @@ import { finishOperation, formatTime, operations, readProgress } from './game/ca
 import type { Operation } from './game/campaign.ts';
 import type { Point } from './game/level.ts';
 import { Mission } from './game/mission.ts';
+import type { CheckpointSave } from './game/mission.ts';
 import { MissionAudio } from './view/audio.ts';
-import { drawMap } from './view/map.ts';
+import { showMap } from './view/map.ts';
+import { showCaseFile } from './view/case-file.ts';
 import { element, Hud } from './view/hud.ts';
 import { OperationsBoard } from './view/operations.ts';
 import type { SceneView } from './view/scene.ts';
 
-type Panel = 'operations' | 'guide' | 'pause-card' | 'map-card' | 'results' | 'error-card';
-const panels: Panel[] = ['operations', 'guide', 'pause-card', 'map-card', 'results', 'error-card'];
+type Panel = 'operations' | 'guide' | 'pause-card' | 'map-card' | 'case-file' | 'results' | 'error-card';
+const panels: Panel[] = ['operations', 'guide', 'pause-card', 'map-card', 'case-file', 'results', 'error-card'];
 const scene = element('scene'), title = element('title'), hud = element('hud'), overlay = element('overlay');
 const start = element<HTMLButtonElement>('start');
 const stick = element('touch-move'), sneak = element('touch-sneak');
 const audio = new MissionAudio(), display = new Hud();
 const keys = new Set<string>();
-const handled = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'KeyC', 'ShiftLeft', 'ShiftRight', 'KeyE', 'KeyQ', 'KeyF', 'Tab', 'Escape']);
+const handled = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight', 'KeyC', 'ShiftLeft', 'ShiftRight', 'KeyE', 'KeyQ', 'KeyF', 'KeyJ', 'Tab', 'Escape']);
 let mission: Mission | undefined;
 let renderer: SceneView | undefined;
 let active = operations[0];
 let starting = false;
 let panel: Panel | undefined;
 let guideFromPause = false;
+let caseFromResults = false;
 let focusBeforePanel: HTMLElement | undefined;
 let throwAt: Point | true | undefined;
 let scramble = false;
@@ -84,7 +87,9 @@ function showPanel(next?: Panel) {
   overlay.hidden = !next;
   title.inert = hud.inert = scene.inert = !!next;
   audio.mix(!!mission && !next && mission.phase === 'active', !!mission?.alarm);
-  if (next === 'map-card' && mission) drawMap(element<HTMLCanvasElement>('full-map'), mission, true);
+  if (next === 'map-card' && mission) showMap(mission, element<HTMLCanvasElement>('full-map'), element('map-sectors'));
+  if (next === 'case-file' && mission) showCaseFile(mission);
+  if (next === 'pause-card') element('restore-checkpoint').hidden = !mission?.checkpoint;
   if (next) element(next).querySelector<HTMLElement>('button')?.focus({ preventScroll: true });
   else if (previous) {
     if (focusBeforePanel?.getClientRects().length) focusBeforePanel.focus({ preventScroll: true });
@@ -96,6 +101,7 @@ function showPanel(next?: Panel) {
 
 function closePanel() {
   if (panel === 'guide' && guideFromPause) showPanel('pause-card');
+  else if (panel === 'case-file' && caseFromResults) showPanel('results');
   else if (panel !== 'results') showPanel();
 }
 
@@ -107,7 +113,7 @@ function toTitle(next?: 'operations') {
   if (!next) start.focus({ preventScroll: true });
 }
 
-async function begin(operation: Operation = active) {
+async function begin(operation: Operation = active, resume?: CheckpointSave) {
   if (starting) return;
   starting = true;
   element<HTMLButtonElement>('operation-start').disabled = true;
@@ -121,7 +127,8 @@ async function begin(operation: Operation = active) {
       renderer = undefined;
       renderer = new SceneView(scene, operation.level);
     }
-    mission = new Mission(operation.level);
+    mission = new Mission(operation.level, resume);
+    audio.setEnvironment(mission.sector?.id ?? operation.level.id);
     active = operation;
     board.select(active);
     renderer.snap(mission.player);
@@ -148,23 +155,31 @@ async function begin(operation: Operation = active) {
 
 function debrief(run: Mission) {
   const completed = run.phase === 'escaped';
-  const result = completed ? (run.alerts === 0 ? 'Ghost' : 'Recovered') : 'Captured';
+  const result = completed ? (run.continued ? 'Checkpoint clear' : run.alerts === 0 ? 'Ghost' : 'Recovered') : 'Captured';
   element('result-label').textContent = completed ? `${run.level.name} / ${result}` : `${run.level.name} / Mission failed`;
-  element('result-title').textContent = completed ? run.level.debrief.title : 'Cover blown.';
-  element('result-text').textContent = completed ? run.level.debrief.body : 'A patrol closed the distance. The facility is back on lockdown.';
+  const ending = run.exit?.ending ?? run.level.debrief;
+  element('result-title').textContent = completed ? ending.title : 'Cover blown.';
+  element('result-text').textContent = completed ? ending.body : run.checkpoint
+    ? 'A patrol closed the distance. Resume to restore the objectives and evidence saved at the last checkpoint.'
+    : 'A patrol closed the distance. The facility is back on lockdown.';
   const stats = [['Time', formatTime(run.elapsed)], ['Alerts', run.alerts.toString()], ['Decoys used', (3 - run.inventory).toString()]];
   if (run.level.scramblers) stats.push(['Scramblers used', (run.level.scramblers - run.scramblers).toString()]);
+  const totalNotes = run.level.stations.filter(station => station.evidence).length;
+  element('results-case').hidden = !run.notes.length && !run.level.briefingEvidence;
+  if (totalNotes) stats.push(['Evidence', `${run.notes.length}/${totalNotes}`]);
   if (completed) {
-    const record = finishOperation(progress, run.level.id, run.elapsed, run.alerts);
+    const record = finishOperation(progress, run.level.id, run.elapsed, run.alerts, run.continued);
     storageSet('campaign', JSON.stringify(progress));
     if (record.best) element('result-text').textContent += ' New personal best.';
     if (record.newGhost) element('result-text').textContent += ' Ghost distinction earned.';
   }
   board.select(active);
   const next = completed && operations[operations.indexOf(active) + 1];
+  const canContinue = !completed && !!run.checkpoint;
   element('next-operation').hidden = !next;
-  element('retry').classList.toggle('primary', !next);
-  element('retry').classList.toggle('quiet-button', !!next);
+  element('retry-checkpoint').hidden = !canContinue;
+  element('retry').classList.toggle('primary', !next && !canContinue);
+  element('retry').classList.toggle('quiet-button', !!next || canContinue);
   element('results-stats').replaceChildren(...stats.map(([label, val]) => {
     const group = document.createElement('div'), term = document.createElement('dt'), value = document.createElement('dd');
     term.textContent = label;
@@ -199,6 +214,7 @@ function update(now: number) {
     throwAt = undefined;
     scramble = false;
     for (const event of mission.events) {
+      if (event.kind === 'sector' && mission.sector) audio.setEnvironment(mission.sector.id);
       display.event(event, mission.elapsed);
       audio.play(event, mission.hidden);
     }
@@ -218,6 +234,9 @@ function bind(id: string, action: () => void) { element(id).addEventListener('cl
 bind('start', () => showPanel('operations'));
 bind('retry', () => void begin());
 bind('restart', () => void begin());
+for (const button of ['restore-checkpoint', 'retry-checkpoint']) bind(button, () => {
+  if (mission?.checkpoint) void begin(active, mission.checkpoint);
+});
 bind('result-operations', () => toTitle('operations'));
 bind('next-operation', () => {
   const next = operations[operations.indexOf(active) + 1];
@@ -227,6 +246,8 @@ bind('title-guide', () => { guideFromPause = false; showPanel('guide'); });
 bind('pause-guide', () => { guideFromPause = true; showPanel('guide'); });
 bind('pause', () => showPanel('pause-card'));
 bind('map-toggle', () => showPanel('map-card'));
+bind('case-toggle', () => { caseFromResults = false; showPanel('case-file'); });
+bind('results-case', () => { caseFromResults = true; showPanel('case-file'); });
 bind('minimap-button', () => showPanel('map-card'));
 bind('motion', () => { movingEffects = !movingEffects; storageSet('motion', movingEffects ? 'on' : 'off'); settingsLabels(); });
 document.querySelectorAll('.close-overlay').forEach(button => button.addEventListener('click', closePanel));
@@ -243,11 +264,13 @@ settingsLabels();
 window.addEventListener('keydown', event => {
   if (event.code === 'Escape' && panel) { event.preventDefault(); if (!event.repeat) closePanel(); return; }
   if (event.code === 'Tab' && panel === 'map-card' && !event.shiftKey) { event.preventDefault(); if (!event.repeat) closePanel(); return; }
+  if (event.code === 'KeyJ' && panel === 'case-file' && !event.ctrlKey && !event.altKey && !event.metaKey) { event.preventDefault(); if (!event.repeat) closePanel(); return; }
   if (!mission || panel || mission.phase !== 'active' || !handled.has(event.code) || event.metaKey || event.altKey || event.ctrlKey) return;
   event.preventDefault();
-  if (event.repeat && ['Escape', 'Tab', 'KeyQ', 'KeyF'].includes(event.code)) return;
+  if (event.repeat && ['Escape', 'Tab', 'KeyQ', 'KeyF', 'KeyJ'].includes(event.code)) return;
   if (event.code === 'Escape') showPanel('pause-card');
   else if (event.code === 'Tab') showPanel('map-card');
+  else if (event.code === 'KeyJ' && !element('case-toggle').hidden) { caseFromResults = false; showPanel('case-file'); }
   else if (event.code === 'KeyQ') throwAt = true;
   else if (event.code === 'KeyF') scramble = true;
   else keys.add(event.code);

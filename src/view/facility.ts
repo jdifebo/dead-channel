@@ -1,5 +1,5 @@
 import * as T from 'three';
-import type { Level, Rect, Wall } from '../game/level.ts';
+import type { Landmark, Level, Rect, Wall } from '../game/level.ts';
 
 const material = (color: string, roughness = .77, metalness = .15) => new T.MeshStandardMaterial({ color, roughness, metalness });
 const glow = (color: string) => new T.MeshBasicMaterial({ color });
@@ -63,6 +63,9 @@ const mats = {
   duct: material('#3f5d5b'), grate: material('#617773', .54, .65),
   amber: glow('#efbd6a'), mint: glow('#95e7e0'), red: glow('#e26a52'), paint: material('#a89456'),
   greyPaint: material('#728885'),
+  blanket: material('#637964', .96, .02), linen: material('#a3ab93', .95, .02),
+  oak: material('#6e5643', .88, .05), paper: material('#b0af94', .92, 0), brass: material('#947453', .58, .45),
+  violet: glow('#a6c8ff'),
 };
 
 const flat = new T.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
@@ -100,6 +103,7 @@ export class Facility {
   readonly group = new T.Group();
   readonly objectives = new Map<string, T.Group>();
   private readonly water = waterMaterial();
+  private transmitter: T.Mesh | undefined;
   private readonly blocks = new Map<T.Material, Block[]>();
   private readonly pool = radialTexture();
 
@@ -111,11 +115,20 @@ export class Facility {
     for (const wall of level.walls) this.addWall(wall);
     this.addFixtures(level);
     for (const pool of level.basins ?? []) this.addBasin(pool);
+    for (const landmark of level.landmarks ?? []) this.addLandmark(landmark);
+    for (const checkpoint of level.checkpoints ?? []) {
+      for (const side of [-1, 1]) this.block(mats.mint, checkpoint.x + side * .84, .038, checkpoint.z, .066, .024, .92);
+      const hatch = new T.MeshBasicMaterial({ map: stencil('CHECKPOINT', 32, '#a7dbc1'), transparent: true, depthWrite: false });
+      this.floor(checkpoint.x, checkpoint.z, 2.45, 2.4, hatch, .043);
+    }
     this.addStations(level);
-    this.buildBlocks();
+    this.buildBlocks(level.sectors ? 27 : Infinity);
   }
 
-  animate(time: number) { this.water.uniforms.time.value = time; }
+  animate(time: number) {
+    this.water.uniforms.time.value = time;
+    if (this.transmitter) this.transmitter.rotation.y = time * .44;
+  }
 
   private floor(x: number, z: number, w: number, d: number, surface: T.Material, height: number) {
     const panel = new T.Mesh(flat, surface);
@@ -147,20 +160,85 @@ export class Facility {
     this.blocks.set(surface, items);
   }
 
-  private buildBlocks() {
+  private buildBlocks(chunkSize: number) {
     const transform = new T.Object3D();
     for (const [surface, items] of this.blocks) {
-      const mesh = new T.InstancedMesh(box, surface, items.length);
-      mesh.castShadow = mesh.receiveShadow = !(surface instanceof T.MeshBasicMaterial);
-      for (const [i, { x, y, z, w, h, d, angle }] of items.entries()) {
-        transform.position.set(x, y, z);
-        transform.scale.set(w, h, d);
-        transform.rotation.y = angle;
-        transform.updateMatrix();
-        mesh.setMatrixAt(i, transform.matrix);
+      const chunks = new Map<number, Block[]>();
+      for (const item of items) {
+        const key = Math.floor(item.z / chunkSize);
+        const chunk = chunks.get(key) ?? [];
+        chunk.push(item);
+        chunks.set(key, chunk);
       }
-      this.group.add(mesh);
+      for (const chunk of chunks.values()) {
+        const mesh = new T.InstancedMesh(box, surface, chunk.length);
+        mesh.castShadow = mesh.receiveShadow = !(surface instanceof T.MeshBasicMaterial);
+        for (const [i, { x, y, z, w, h, d, angle }] of chunk.entries()) {
+          transform.position.set(x, y, z);
+          transform.scale.set(w, h, d);
+          transform.rotation.y = angle;
+          transform.updateMatrix();
+          mesh.setMatrixAt(i, transform.matrix);
+        }
+        this.group.add(mesh);
+      }
     }
+  }
+
+  private cylinder(surface: T.Material, x: number, y: number, z: number, radius: number, height: number) {
+    const mesh = new T.Mesh(pumpCylinder, surface);
+    mesh.position.set(x, y, z);
+    mesh.scale.set(radius, height, radius);
+    mesh.castShadow = true;
+    this.group.add(mesh);
+    return mesh;
+  }
+
+  private addLandmark({ kind, x, z }: Landmark) {
+    if (kind === 'bunks') {
+      for (const side of [-1, 1]) {
+        this.block(mats.grate, x + side * .93, .43, z, 1.27, .13, 2.9);
+        this.block(mats.blanket, x + side * .93, .59, z + .28, 1.13, .19, 1.87);
+        this.block(mats.linen, x + side * .93, .66, z - .91, 1.0, .14, .42);
+        for (const end of [-1, 1]) this.block(mats.grate, x + side * .93, .45, z + end * 1.42, 1.27, .89, .10);
+      }
+      return;
+    }
+    if (kind === 'desk') {
+      this.block(mats.rack, x, .4, z, 3.1, .8, 1.32);
+      this.block(mats.oak, x, .85, z, 3.25, .11, 1.5);
+      this.block(mats.paper, x - .43, .916, z + .25, .54, .018, .41, -.18);
+      this.block(mats.amber, x + .95, 1.13, z - .42, .26, .09, .24);
+      return;
+    }
+    if (kind === 'reels' || kind === 'breakers') {
+      const span = kind === 'reels' ? 1.3 : 1.95;
+      this.block(mats.rack, x, .66, z, span, 1.32, .66);
+      for (const side of [-1, 1]) {
+        if (kind === 'reels') {
+          this.cylinder(mats.bolt, x + side * .32, 1.335, z, .23, .07);
+          this.cylinder(mats.panel, x + side * .32, 1.394, z, .069, .08);
+        } else {
+          this.block(mats.brass, x + side * .43, 1.35, z, .48, .12, .30);
+          this.block(mats.amber, x + side * .43, 1.43, z, .16, .051, .17);
+        }
+      }
+      return;
+    }
+    this.cylinder(mats.grate, x, 1.85, z, 2.95, .43);
+    this.cylinder(mats.brass, x, 2.14, z, 2.48, .24);
+    this.cylinder(mats.panel, x, 2.39, z, 2.06, .37);
+    this.cylinder(mats.violet, x, 2.603, z, 1.19, .063);
+    this.cylinder(mats.grate, x, 2.77, z, .88, .31);
+    this.cylinder(mats.violet, x, 2.99, z, .22, .16);
+    for (let i = 0; i < 16; i++) {
+      const angle = i / 16 * Math.PI * 2;
+      this.block(i % 4 === 0 ? mats.violet : mats.panel, x + Math.cos(angle) * 2.64, 2.17, z + Math.sin(angle) * 2.64,
+        .4, .17, .14, -angle);
+    }
+    this.transmitter = new T.Mesh(new T.TorusGeometry(1.53, .061, 6, 38, Math.PI * 1.54).rotateX(-Math.PI / 2), mats.violet);
+    this.transmitter.position.set(x, 2.65, z);
+    this.group.add(this.transmitter);
   }
 
   private addWall(wall: Wall) {
@@ -287,6 +365,9 @@ export class Facility {
         this.block(mats.wallTop, x, 1.76, z - 1.02, 3.86, .22, .58);
         for (const side of [-1, 1]) this.block(mats.grate, x + side * 1.82, .82, z - 1.02, .26, 1.64, .54);
         this.block(mats.black, x, .036, z - .2, 3.68, .075, 1.16);
+      } else if (kind === 'evidence') {
+        this.block(mats.rack, x, .36, z - .82, .99, .72, .63);
+        this.block(mats.paper, x, .739, z - .82, .55, .035, .42, -.18);
       } else {
         const width = id === 'recording' || id === 'manifest' ? 2.8 : 1.15;
         this.block(mats.rack, x, .45, z - .65, width, .9, .8);
@@ -296,10 +377,10 @@ export class Facility {
         for (let i = 0; i < 5; i++) this.block(i < 2 ? mats.amber : mats.grate, x - .24 + i * .12, .979, z - .36, .065, .025, .07);
       }
       const marker = new T.Group();
-      const diamond = new T.Mesh(new T.OctahedronGeometry(.255), kind === 'power' ? mats.mint : mats.amber);
+      const diamond = new T.Mesh(new T.OctahedronGeometry(kind === 'evidence' ? .18 : .255), kind === 'power' ? mats.mint : kind === 'evidence' ? mats.violet : mats.amber);
       diamond.rotation.y = Math.PI / 4;
       marker.add(diamond);
-      const ring = new T.Mesh(new T.RingGeometry(.46, .49, 4).rotateX(-Math.PI / 2).rotateY(Math.PI / 4), new T.MeshBasicMaterial({ color: kind === 'power' ? '#95e7e0' : '#efbd6a', side: T.DoubleSide }));
+      const ring = new T.Mesh(new T.RingGeometry(.46, .49, 4).rotateX(-Math.PI / 2).rotateY(Math.PI / 4), new T.MeshBasicMaterial({ color: kind === 'power' ? '#95e7e0' : kind === 'evidence' ? '#a6c8ff' : '#efbd6a', side: T.DoubleSide }));
       ring.position.y = -.12;
       marker.add(ring);
       marker.position.set(x, 1.58, z);

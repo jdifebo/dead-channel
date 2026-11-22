@@ -1,9 +1,17 @@
 import type { MissionEvent } from '../game/mission.ts';
 
+const roomTone: Record<string, [cutoff: number, pitch: number]> = {
+  customs: [175, 48], ward: [89, 40], exchange: [295, 55], sluice: [420, 43], transmitter: [210, 65.4],
+  'listening-post': [205, 49],
+};
+
 export class MissionAudio {
   private context?: AudioContext;
   private master?: GainNode;
   private room?: GainNode;
+  private roomFilter?: BiquadFilterNode;
+  private readonly drones: OscillatorNode[] = [];
+  private environment = '';
   private noise?: AudioBuffer;
   enabled = true;
 
@@ -30,7 +38,7 @@ export class MissionAudio {
     const motor = ctx.createBufferSource();
     motor.buffer = this.noise;
     motor.loop = true;
-    const muffler = ctx.createBiquadFilter();
+    const muffler = this.roomFilter = ctx.createBiquadFilter();
     muffler.type = 'lowpass';
     muffler.frequency.value = 155;
     motor.connect(muffler).connect(this.room);
@@ -42,7 +50,18 @@ export class MissionAudio {
       level.gain.value = .19;
       hum.connect(level).connect(this.room);
       hum.start();
+      this.drones.push(hum);
     }
+    this.setEnvironment(this.environment);
+  }
+
+  setEnvironment(name: string) {
+    this.environment = name;
+    if (!this.context || !this.roomFilter) return;
+    const time = this.context.currentTime;
+    const [cutoff, pitch] = roomTone[name] ?? [155, 48];
+    this.roomFilter.frequency.setTargetAtTime(cutoff, time, 1.1);
+    this.drones.forEach((drone, i) => drone.frequency.setTargetAtTime(pitch * [1, 1.069, 2.021][i], time, 1.3));
   }
 
   mix(active: boolean, alarm: boolean) {
@@ -82,6 +101,7 @@ export class MissionAudio {
 
   play(event: MissionEvent, hidden: boolean) {
     if (!this.context || !this.enabled) return;
+    if (event.message && event.speaker) this.tick(1720, .18, .12);
     switch (event.kind) {
       case 'step': this.tick(event.heavy ? 180 : 330, .085, event.heavy ? .23 : hidden ? .032 : .12); break;
       case 'throw': this.tick(1250, .13, .09); break;
@@ -92,6 +112,9 @@ export class MissionAudio {
         break;
       case 'power': this.tone(420, 170, .36, .17, 0, 'triangle'); break;
       case 'objective': this.tone(310, 440, .23, .15); this.tone(620, 680, .35, .13, .17); break;
+      case 'evidence': this.tick(1050, .14, .12); this.tone(490, 515, .31, .09); break;
+      case 'checkpoint': this.tone(185, 220, .45, .12, 0, 'triangle'); this.tone(311, 370, .48, .11, .14); break;
+      case 'sector': this.tick(230, .35, .085); break;
       case 'scramble': this.tick(1400, .28, .18); this.tone(235, 73, .54, .20, 0, 'triangle'); break;
       case 'escaped': [261, 330, 392, 524].forEach((note, i) => this.tone(note, note, .62, .15, i * .115)); break;
       case 'caught': this.tone(163, 47, .72, .35, 0, 'triangle'); break;

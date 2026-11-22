@@ -127,6 +127,7 @@ export class SceneView {
   private readonly target = new T.Vector3();
   private readonly ray = new T.Raycaster();
   private readonly facility: Facility;
+  private readonly directional: T.DirectionalLight;
   private readonly grids: SecurityView;
   private readonly observer: ResizeObserver;
   private readonly operative = new Actor(true);
@@ -157,12 +158,13 @@ export class SceneView {
     light.position.set(-9, 27, -9);
     light.castShadow = true;
     light.shadow.mapSize.set(2048, 2048);
-    const shadowSize = Math.max(level.bounds.w, level.bounds.d) / 2 + 5;
+    const shadowSize = level.sectors ? 27 : Math.max(level.bounds.w, level.bounds.d) / 2 + 5;
     Object.assign(light.shadow.camera, { left: -shadowSize, right: shadowSize, top: shadowSize, bottom: -shadowSize, near: 4, far: 77 });
     light.shadow.camera.updateProjectionMatrix();
     light.shadow.normalBias = .035;
     light.shadow.bias = -.00025;
-    this.world.add(light);
+    this.directional = light;
+    this.world.add(light, light.target);
 
     this.facility = new Facility(level);
     this.grids = new SecurityView(level);
@@ -247,6 +249,10 @@ export class SceneView {
     this.camera.position.set(this.target.x, 20, this.target.z + 14.3);
     this.camera.lookAt(this.target);
     this.camera.updateMatrixWorld();
+    if (this.level.sectors) {
+      this.directional.target.position.set(this.target.x, 0, this.target.z);
+      this.directional.position.set(this.target.x - 9, 27, this.target.z - 9);
+    }
   }
 
   pointAt(x: number, y: number): Point | undefined {
@@ -264,11 +270,14 @@ export class SceneView {
     this.placeCamera();
     this.operative.update(player, dt, mission.stance === 'sneak', mission.hidden);
     mission.guards.forEach((guard, i) => {
-      this.guards[i].update(guard, dt, false, guard.awareness > .17 || guard.mode === 'chase');
-      this.guardCones[i].update(guard, mission.sightWalls, guard.awareness);
+      const actor = this.guards[i];
+      const nearby = Math.abs(guard.z - this.target.z) < 29;
+      actor.root.visible = nearby;
+      if (nearby) actor.update(guard, dt, false, guard.awareness > .17 || guard.mode === 'chase');
+      this.guardCones[i].update(guard, mission.sightWalls, guard.awareness, !nearby);
     });
     mission.cameras.forEach((camera, i) => {
-      this.cameraCones[i].update(camera, mission.sightWalls, camera.awareness, camera.disabled);
+      this.cameraCones[i].update(camera, mission.sightWalls, camera.awareness, camera.disabled || Math.abs(camera.z - this.target.z) >= 29);
       this.security[i].base.rotation.y = camera.angle;
       this.security[i].light.material.color.set(camera.disabled ? '#465754' : '#ff755f');
     });

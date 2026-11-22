@@ -14,6 +14,7 @@ const minimap = element<HTMLCanvasElement>('minimap');
 const pips = [...document.querySelectorAll('.decoy-pips i')];
 const scrambler = element('scrambler'), beamReadout = element('beam-state');
 const touchScramble = element<HTMLButtonElement>('touch-scramble');
+const sectorCard = element('sector-card'), checkpointToast = element('checkpoint-toast');
 
 const put = (target: Element, value: string) => { if (target.textContent !== value) target.textContent = value; };
 
@@ -21,19 +22,30 @@ export class Hud {
   private until = 0;
   private ductHint = false;
   private nextMap = 0;
+  private chapterUntil = 0;
+  private savedUntil = 0;
+  private lastSector: string | undefined;
 
   start(mission: Mission) {
     this.ductHint = false;
     this.nextMap = 0;
+    this.lastSector = undefined;
+    this.savedUntil = 0;
+    checkpointToast.hidden = true;
     for (const id of ['mission-name', 'pause-name', 'plan-name']) put(element(id), mission.level.name);
     element('map-beams').hidden = !mission.level.beams?.length;
+    element('map-evidence').hidden = !mission.level.stations.some(station => station.kind === 'evidence');
+    element('map-checkpoints').hidden = !mission.level.checkpoints?.length;
+    element('case-toggle').hidden = !mission.level.stations.some(station => !!station.evidence);
     scrambler.hidden = touchScramble.hidden = !mission.level.scramblers;
     element('hud').toggleAttribute('data-scramblers', !!mission.level.scramblers);
-    this.message(mission.level.intro, 0, 9);
+    this.message(mission.continued ? 'Back at the checkpoint. Your case file contains the records saved here.' : mission.level.intro,
+      mission.elapsed, 10, mission.level.sectors && !mission.continued ? 'MARA / CONTROL' : 'CONTROL');
   }
 
-  private message(value: string, now: number, seconds = 5.5) {
+  private message(value: string, now: number, seconds = 5.5, speaker = 'CONTROL') {
     put(radioText, value);
+    put(element('radio-source'), speaker);
     this.until = now + seconds;
     radio.hidden = false;
   }
@@ -43,7 +55,14 @@ export class Hud {
       case 'alarm': this.message(event.message ?? 'They have your position. Break sight and change direction.', now); break;
       case 'quiet': this.message('Search is winding down. Keep moving.', now); break;
       case 'power':
-      case 'objective': if (event.message) this.message(event.message, now, 7); break;
+      case 'sector':
+      case 'objective':
+      case 'evidence': if (event.message) this.message(event.message, now, 10, event.speaker); break;
+      case 'checkpoint':
+        this.savedUntil = now + 4.2;
+        put(checkpointToast, `Checkpoint saved · ${event.message}`);
+        checkpointToast.hidden = false;
+        break;
     }
   }
 
@@ -51,6 +70,16 @@ export class Hud {
     const { level, player } = mission;
     put(objective, mission.order);
     put(location, level.zones.find(zone => inside(player, zone, .04))?.name ?? level.name);
+    if (mission.sector?.id !== this.lastSector) {
+      this.lastSector = mission.sector?.id;
+      this.chapterUntil = mission.elapsed + 3.75;
+      if (mission.sector) {
+        put(sectorCard.querySelector('span')!, `${level.name} / Sector ${mission.sector.name.split(' / ')[0]}`);
+        put(sectorCard.querySelector('strong')!, mission.sector.name.split(' / ')[1]);
+      }
+    }
+    sectorCard.hidden = !mission.sector || mission.elapsed >= this.chapterUntil;
+    if (mission.elapsed >= this.savedUntil) checkpointToast.hidden = true;
     const alert = mission.alarm > 0 ? 'alarm' : mission.exposure > .12 ? 'suspicion' : 'calm';
     status.dataset.alert = alert;
     put(statusText, alert === 'alarm' ? 'Search active' : alert === 'suspicion' ? 'Suspicion' : mission.hidden ? 'Concealed' : 'Undetected');

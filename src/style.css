@@ -126,7 +126,8 @@ kbd { display: inline-flex; justify-content: center; align-items: center; min-wi
 .operations-header h2 { margin-bottom: 0; }
 .operations-layout { display: grid; grid-template-columns: minmax(185px, .42fr) minmax(0, 1fr); gap: 16px; margin-top: 16px; }
 .operations-sidebar p { margin: 5px 0 12px; color: var(--muted); }
-#operations-roster { display: grid; gap: 8px; }
+.operation-roster { display: grid; gap: 8px; }
+.roster-label { font: 700 .69rem var(--mono); text-transform: uppercase; letter-spacing: .12em; color: var(--muted); margin: 13px 0 7px; }
 .operation-option { display: grid; grid-template-columns: 27px 1fr; align-items: start; gap: 7px; padding: 12px 10px; text-align: left; background: #111c1e; border: 1px solid var(--edge); border-left: 2px solid transparent; }
 .operation-option:hover { background: #233635; }
 .operation-option[aria-pressed='true'] { border-color: #9bd8c875; border-left-color: var(--mint); background: #243835; }
@@ -135,6 +136,8 @@ kbd { display: inline-flex; justify-content: center; align-items: center; min-wi
 .operation-score { display: block; margin-top: 4px; color: var(--muted); font: .72rem var(--mono); }
 .operations-brief { --art: url('/relay.jpg'); border: 1px solid var(--edge); background: linear-gradient(90deg, #081213f5 3%, #081213d9 42%, #08121324 100%), linear-gradient(0deg, #081213e8, transparent 73%), var(--art) 56% center / cover; }
 .operations-brief[data-art='blackwater-lock'] { --art: url('/blackwater.jpg'); }
+.operations-brief[data-art='listening-post'] { --art: url('/listening-post.jpg'); }
+.operations-brief[data-art='mercy-station'] { --art: url('/mercy-station.jpg'); }
 .briefing-copy { padding: clamp(16px, 4vw, 33px); max-width: 530px; }
 .briefing-copy h3 { font-size: clamp(2rem, 5.5vw, 3.5rem); line-height: .99; margin: 7px 0 12px; letter-spacing: -.055em; }
 .briefing-copy p { margin: 0 0 15px; color: #d7e0d5; }
@@ -142,6 +145,7 @@ kbd { display: inline-flex; justify-content: center; align-items: center; min-wi
 .briefing-copy li { padding-left: 3px; margin: 4px 0; }
 .briefing-copy li::marker { color: var(--amber); font: 700 .8rem var(--mono); }
 .briefing-copy #operations-loadout { color: #a8e2ec; font: .8rem/1.4 var(--mono); }
+.briefing-copy blockquote { border-left: 2px solid var(--amber); color: #eed3a4; font-size: .92rem; line-height: 1.45; margin: 14px 0 17px; padding-left: 12px; }
 .controls { margin: 18px 0 23px; }
 .controls div { display: flex; align-items: center; justify-content: space-between; gap: 13px; padding: 10px 0; border-top: 1px solid var(--edge); }
 .controls dt { color: var(--muted); font-size: .86rem; }
@@ -159,6 +163,19 @@ kbd { display: inline-flex; justify-content: center; align-items: center; min-wi
 .map-key span:nth-child(3) i { border: 1px solid var(--mint); background: none; border-radius: 0; transform: rotate(45deg); }
 .map-key span:nth-child(4) i { background: #438d85; border-radius: 0; }
 .map-key span:nth-child(5) i { background: #ef8676; border-radius: 0; width: 10px; height: 3px; }
+.map-key span:nth-child(6) i { background: #a6cff3; border-radius: 0; transform: rotate(45deg); }
+.map-key span:nth-child(7) i { border: 1px solid var(--mint); background: transparent; border-radius: 0; }
+.map-sectors { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0 13px; }
+.map-sectors button { background: #0e191a; border: 1px solid var(--edge); color: #c8dbd3; font: .72rem var(--mono); min-height: 32px; padding: 5px 7px; }
+.map-sectors button[aria-pressed='true'] { border-color: var(--mint); color: var(--mint); background: #1e3431; }
+.case-file { width: min(100%, 700px); max-height: calc(100dvh - 30px); overflow-y: auto; }
+.case-file header { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+#case-notes article { padding: 13px 15px; margin-top: 10px; border: 1px solid #cdd9ba37; border-left: 2px solid #9dc9e2; background: #1d282a; }
+#case-notes article p { margin: 8px 0 0; white-space: pre-line; }
+#case-notes article h3 { margin: 6px 0 0; font-size: 1.25rem; }
+.sector-card { position: absolute; left: 50%; top: 19%; translate: -50% 0; background: #0e181be8; border: 1px solid var(--edge); border-left: 2px solid var(--amber); padding: 11px 20px; text-align: center; min-width: 183px; }
+.sector-card strong { display: block; font-size: clamp(1rem, 3.2vw, 1.8rem); margin-top: 4px; }
+.checkpoint-toast { position: absolute; right: var(--inset); top: calc(var(--inset) + 60px); background: #162722f2; color: var(--mint); border: 1px solid var(--edge); padding: 9px 12px; font: .76rem var(--mono); max-width: 190px; }
 .results-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(86px, 1fr)); gap: 6px; margin: 20px 0 24px; }
 .results-stats div { background: #1e302f; padding: 10px; }
 .results-stats dt { color: var(--muted); font: .72rem var(--mono); }
@@ -166,7 +183,7 @@ kbd { display: inline-flex; justify-content: center; align-items: center; min-wi
 
 @media (max-width: 720px) {
   .operations-layout { grid-template-columns: 1fr; gap: 12px; }
-  #operations-roster { grid-template-columns: 1fr 1fr; }
+  #operations-roster { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .operation-option { grid-template-columns: 20px 1fr; padding: 9px 7px; gap: 4px; }
   .operation-name { font-size: .9rem; }
   .operations-header { padding-bottom: 11px; }
@@ -178,14 +195,19 @@ kbd { display: inline-flex; justify-content: center; align-items: center; min-wi
   .title-footer { font-size: .62rem; gap: 6px; }
   .mission-panel { padding: 8px 9px; gap: 4px; }
   .mission-panel strong { max-width: 155px; }
+  .hud:has(#case-toggle:not([hidden])) .mission-panel strong { max-width: 137px; }
   .mission-panel .eyebrow, #location { font-size: .63rem; }
   .mission-panel .signal { display: none; }
-  .status { top: calc(var(--inset) + 92px); left: var(--inset); translate: none; width: 142px; }
+  .status { top: calc(var(--inset) + 47px); left: auto; right: var(--inset); translate: none; width: 132px; }
+  .checkpoint-toast { top: calc(var(--inset) + 102px); }
   .hud-actions kbd { display: none; }
+  .sector-card { top: 26%; }
+  .map-card canvas { max-height: 51vh; }
   .hud-button { min-height: 40px; padding-inline: 7px; font-size: .67rem; }
   .minimap { width: 106px; }
   .minimap .eyebrow { font-size: .53rem; letter-spacing: .1em; }
   .interaction, .beam-state { bottom: 17%; }
+  .beam-state { max-width: calc(100% - 26px); white-space: normal; text-align: center; }
   .equipment { padding: 7px; }
   .equipment p { display: none; }
   .radio { bottom: calc(var(--inset) + 69px); }

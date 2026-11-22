@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#090f12" />
-    <meta name="description" content="Infiltrate Salt Relay and Blackwater Lock in this browser-based 3D stealth campaign." />
+    <meta name="description" content="Trace a twelve-year-old distress call to Mercy Station in this browser-based 3D stealth campaign." />
     <title>Dead Channel · Stealth Campaign</title>
   </head>
   <body>
@@ -16,9 +16,9 @@
           <button class="quiet-button sound-button" type="button" aria-pressed="false">Sound on</button>
         </header>
         <div class="title-content">
-          <div class="eyebrow title-kicker"><span></span> MISSION 01 <b></b> SALT RELAY</div>
+          <div class="eyebrow title-kicker"><span></span> DISPATCH 619 <b></b> MERCY STATION</div>
           <h1 id="game-title">Dead<br />Channel<span>.</span></h1>
-          <p>A distress call reached the coast at 02:14.<br class="desktop-break" /> Find the recording. Leave before they know it’s gone.</p>
+          <p>A distress call reached the coast at 02:14.<br class="desktop-break" /> It was first recorded twelve years ago.</p>
           <div class="title-actions">
             <button id="start" class="primary" type="button">Operations</button>
             <button id="title-guide" class="quiet-button" type="button">Field guide</button>
@@ -42,8 +42,11 @@
         </div>
         <div class="hud-actions">
           <button id="map-toggle" class="hud-button" type="button" aria-label="Facility plan">Plan <kbd>Tab</kbd></button>
+          <button id="case-toggle" class="hud-button" type="button" aria-label="Case file" hidden>File <kbd>J</kbd></button>
           <button id="pause" class="hud-button" type="button" aria-label="Pause mission">Pause <kbd>Esc</kbd></button>
         </div>
+        <div id="sector-card" class="sector-card" aria-live="polite" hidden><span class="eyebrow"></span><strong></strong></div>
+        <div id="checkpoint-toast" class="checkpoint-toast" role="status" hidden></div>
         <div class="radio" id="radio" role="status" hidden>
           <div class="radio-mark" aria-hidden="true"><i class="signal"></i></div>
           <div><span class="eyebrow" id="radio-source">CONTROL</span><p id="radio-text"></p></div>
@@ -82,13 +85,17 @@
           <div class="operations-layout">
             <div class="operations-sidebar">
               <p id="operations-progress" class="eyebrow"></p>
-              <div id="operations-roster" role="group" aria-label="Choose an operation"></div>
+              <div class="roster-label">Main story</div>
+              <div id="story-roster" class="operation-roster" role="group" aria-label="Main operations"></div>
+              <div class="roster-label">Prologue tutorials</div>
+              <div id="operations-roster" class="operation-roster" role="group" aria-label="Prologue tutorials"></div>
             </div>
             <div id="operations-brief" class="operations-brief" aria-labelledby="operations-name">
               <div class="briefing-copy">
                 <div class="eyebrow" id="operations-subtitle"></div>
                 <h3 id="operations-name"></h3>
                 <p id="operations-story"></p>
+                <blockquote id="operations-quote" hidden></blockquote>
                 <ol id="operations-tasks"></ol>
                 <p id="operations-loadout" hidden></p>
                 <button id="operation-start" class="primary" type="button">Begin infiltration</button>
@@ -111,6 +118,7 @@
             <div><dt>Use equipment</dt><dd>Hold <kbd>E</kbd></dd></div>
             <div><dt>Throw a decoy</dt><dd>Click a location or press <kbd>Q</kbd></dd></div>
             <div><dt>Blackwater scrambler</dt><dd><kbd>F</kbd> near cameras or lasers</dd></div>
+            <div><dt>Review recovered evidence</dt><dd><kbd>J</kbd></dd></div>
             <div><dt>Facility plan / pause</dt><dd><kbd>Tab</kbd> / <kbd>Esc</kbd></dd></div>
           </dl>
           <p class="touch-guide">On touchscreens, drag the movement pad and use the action buttons.</p>
@@ -121,6 +129,7 @@
           <h2>Mission paused.</h2>
           <div class="stack">
             <button class="primary close-overlay" type="button">Resume mission</button>
+            <button id="restore-checkpoint" class="quiet-button" type="button" hidden>Restore checkpoint</button>
             <button id="restart" class="quiet-button" type="button">Restart mission</button>
             <button id="pause-guide" class="quiet-button" type="button">Field guide</button>
             <button class="quiet-button sound-button" type="button" aria-pressed="false">Sound on</button>
@@ -131,14 +140,19 @@
         <div id="map-card" class="card map-card" hidden>
           <header><div><div id="plan-name" class="eyebrow">Salt Relay</div><h2>Facility plan</h2></div><button class="quiet-button close-overlay" type="button">Close <kbd>Tab</kbd></button></header>
           <canvas id="full-map" width="840" height="700" aria-label="Facility map showing your position and mission equipment"></canvas>
-          <div class="map-key"><span><i></i> You</span><span><i></i> Objective</span><span><i></i> Power controls</span><span><i></i> Service duct</span><span id="map-beams" hidden><i></i> Laser grid</span></div>
+          <div id="map-sectors" class="map-sectors" role="group" aria-label="Facility sectors" hidden></div>
+          <div class="map-key"><span><i></i> You</span><span><i></i> Objective</span><span><i></i> Power controls</span><span><i></i> Service duct</span><span id="map-beams" hidden><i></i> Laser grid</span><span id="map-evidence" hidden><i></i> Evidence</span><span id="map-checkpoints" hidden><i></i> Checkpoint</span></div>
+        </div>
+        <div id="case-file" class="card case-file" hidden>
+          <header><div><div class="eyebrow" id="file-name"></div><h2>Case file</h2></div><button class="quiet-button close-overlay" type="button">Close <kbd>J</kbd></button></header>
+          <div id="case-notes"></div>
         </div>
         <div id="results" class="card" hidden>
           <div class="eyebrow" id="result-label"></div>
           <h2 id="result-title"></h2>
           <p id="result-text"></p>
           <dl id="results-stats" class="results-stats"></dl>
-          <div class="result-actions"><button id="next-operation" class="primary" type="button" hidden>Next operation</button><button id="retry" class="primary" type="button">Replay mission</button><button id="result-operations" class="quiet-button" type="button">Operations</button></div>
+          <div class="result-actions"><button id="next-operation" class="primary" type="button" hidden>Next operation</button><button id="retry-checkpoint" class="primary" type="button" hidden>Resume from checkpoint</button><button id="retry" class="primary" type="button">Replay mission</button><button id="results-case" class="quiet-button" type="button" hidden>Review case file</button><button id="result-operations" class="quiet-button" type="button">Operations</button></div>
         </div>
         <div id="error-card" class="card" hidden>
           <div class="eyebrow">DISPLAY ERROR</div>
