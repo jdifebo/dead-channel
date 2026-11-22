@@ -18,7 +18,7 @@ const rack = (x: number, z: number, w: number, d: number): Wall => ({ ...rect(x,
 const ductWall = (x: number, z: number): Wall => ({ ...rect(x, z, .38, 14), h: .82, kind: 'duct' });
 
 export const saltRelay: Level = {
-  name: 'Salt Relay', bounds: rect(0, 0, 34, 44), start: point(0, 19),
+  name: 'Salt Relay', bounds: rect(0, 0, 34, 44), start: point(-5.9, 19),
   zones: [
     { ...rect(0, 18, 34, 8), name: 'Intake', tone: '#203639' },
     { ...rect(-10.5, 1.5, 13, 25), name: 'Cargo', tone: '#3c362d' },
@@ -36,14 +36,14 @@ export const saltRelay: Level = {
     wall(4, 9.7, .55, 8.6), wall(4, -.5, .55, 5.6), wall(4, -8.1, .55, 5.5),
     wall(-5, -19.7, .55, 4.4), wall(-5, -13, .55, 3.9),
     wall(5, -19.7, .55, 4.4), wall(5, -13, .55, 3.9),
-    crate(-13.5, 17.5, 3, 2.6), crate(13.5, 18.2, 3.5, 2.2),
+    crate(-13.5, 17.5, 3, 2.6), crate(-4.6, 16.9, 1.65, 1.05), crate(13.5, 18.2, 3.5, 2.2),
     crate(-14, 9.4, 3.3, 3.5), crate(-8.1, 8, 3.6, 2.1), crate(-11, 3.6, 4.8, 2.3),
     crate(-14.25, -2.3, 2.9, 3.6), crate(-8.65, -5.3, 3.7, 2.4), crate(-15, -7.7, 2, 2.5),
     crate(-14.8, -14.3, 2.5, 2.4), crate(-8.6, -13.9, 1.9, 2.2),
     rack(2.35, 4.5, 1.1, 3.4), rack(-2.33, -2, 1.2, 4.3), rack(2.25, -7.6, 1.15, 2.7),
     rack(7.1, 6.4, 1.6, 3.7), rack(8, -3, 1.3, 4.4), rack(15.25, -2, 1.3, 3.7),
     ductWall(11, .15), ductWall(13.25, .15),
-    rack(-3.25, -17.7, 1.15, 4.2), rack(3.1, -17.85, 1.05, 4.7),
+    rack(-2.92, -17.7, 1.15, 4.2), rack(3.1, -17.85, 1.05, 4.7),
     rack(8.2, -17.9, 1.4, 4), rack(14.1, -17.9, 2.15, 4.1),
   ],
   duct: rect(12.125, .15, 1.85, 14.25),

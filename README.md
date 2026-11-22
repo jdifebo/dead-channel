@@ -11,7 +11,7 @@ npm ci
 npm run dev
 ```
 
-Move with **WASD** or the arrow keys, hold **Ctrl** or **C** to sneak, hold **Shift** to sprint, hold **E** to operate equipment, and click a floor location to throw a decoy. **Q** throws in the direction you face. **Tab** opens the facility plan and **Esc** pauses.
+Move with **WASD** or the arrow keys, hold **C** to sneak, hold **Shift** to sprint, hold **E** to operate equipment, and click a floor location to throw a decoy. **Q** throws in the direction you face. **Tab** opens the facility plan and **Esc** pauses. Touchscreens have a movement pad and dedicated action buttons.
 
 ```sh
 npm test
@@ -31,3 +31,7 @@ npm run build
 The simulation receives one input sample per step and publishes state and events. It runs headlessly without WebGL, browser APIs, or audio. Three.js and the facility plan consume the same level definition. Add a new mission by authoring another level definition, checking its routes and interaction locations, then supplying it to the simulation and presentation.
 
 Development milestones cover the level and stealth simulation, the playable audiovisual mission, and verification and publication. The GitHub Pages workflow builds `dist/` using relative asset paths, so it works under a repository subpath. Enable GitHub Actions as the Pages publishing source on the repository.
+
+## Title artwork
+
+`public/relay.jpg` was generated with the built-in ImageGen tool. The prompt requested widescreen key art without text or UI, with a crouched operative in the right third of a wet coastal-relay corridor, dark space on the left for the title, teal concrete and steel, amber fixtures, a red distant light, and subtle fog and film grain.

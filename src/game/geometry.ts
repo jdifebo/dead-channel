@@ -43,8 +43,12 @@ export class Navigation {
   private readonly x0: number;
   private readonly z0: number;
   private readonly open: Uint8Array;
+  private readonly walls: Rect[];
+  private readonly radius: number;
 
-  constructor(bounds: Rect, private readonly walls: Rect[], private readonly radius: number) {
+  constructor(bounds: Rect, walls: Rect[], radius: number) {
+    this.walls = walls;
+    this.radius = radius;
     this.width = Math.floor(bounds.w / this.step);
     this.depth = Math.floor(bounds.d / this.step);
     this.x0 = bounds.x - bounds.w / 2 + this.step / 2;

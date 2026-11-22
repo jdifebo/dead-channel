@@ -25,6 +25,7 @@ const PLAYER_RADIUS = .31;
 const GUARD_RADIUS = .33;
 
 export class Mission {
+  readonly level: Level;
   readonly player: Agent;
   readonly guards: Guard[];
   readonly cameras: Camera[];
@@ -49,7 +50,8 @@ export class Mission {
   private stepDistance = 0;
   private suspected = false;
 
-  constructor(readonly level: Level) {
+  constructor(level: Level) {
+    this.level = level;
     this.player = { ...level.start, angle: Math.PI, speed: 0 };
     this.guards = level.patrols.map(patrol => ({ ...patrol.route[0], patrol, index: 1, mode: 'patrol',
       angle: angleTo(patrol.route[0], patrol.route[1]), speed: 0, awareness: 0, wait: patrol.delay ?? 0,
@@ -68,11 +70,17 @@ export class Mission {
     this.movePlayer(input, dt);
     this.updateDecoys(input, dt);
     this.updateCameras(dt);
-    for (const guard of this.guards) this.updateGuard(guard, dt);
+    for (const guard of this.guards) {
+      this.updateGuard(guard, dt);
+      if (this.phase !== 'active') break;
+    }
     this.exposure = Math.max(0, ...this.guards.map(g => g.awareness), ...this.cameras.map(c => c.awareness));
     if (previousAlarm > 0 && this.alarm === 0) this.events.push({ kind: 'quiet' });
-    if (!this.suspected && this.exposure > .13 && this.alarm === 0) this.events.push({ kind: 'suspicion' });
-    this.suspected = this.exposure > .08;
+    if (!this.suspected && this.exposure > .13 && this.alarm === 0) {
+      this.events.push({ kind: 'suspicion' });
+      this.suspected = true;
+    }
+    if (this.exposure < .08) this.suspected = false;
     if (this.phase === 'active') this.updateInteraction(input.interact, dt);
   }
 
