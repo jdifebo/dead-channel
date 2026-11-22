@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { distance, inside, visible } from '../src/game/geometry.ts';
-import { saltRelay } from '../src/game/level.ts';
 import type { Level, Point } from '../src/game/level.ts';
+import { blackwaterLock } from '../src/game/levels/blackwater-lock.ts';
+import { saltRelay } from '../src/game/levels/salt-relay.ts';
 import { Mission } from '../src/game/mission.ts';
 import type { Input, MissionEvent } from '../src/game/mission.ts';
 
@@ -13,21 +14,25 @@ const quiet: Level = { ...saltRelay, patrols: [], cameras: [] };
 
 function tick(mission: Mission, seconds: number, input: Partial<Input> = {}): MissionEvent[] {
   const events: MissionEvent[] = [];
-  for (let n = 0; n < seconds / dt; n++) {
-    mission.step({ ...idle, ...input, throwAt: n === 0 ? input.throwAt : undefined }, dt);
+  for (let n = 0; n < Math.round(seconds / dt); n++) {
+    mission.step({ ...idle, ...input, throwAt: n === 0 ? input.throwAt : undefined, scramble: n === 0 && input.scramble }, dt);
     events.push(...mission.events);
   }
   return events;
 }
 
-function walk(mission: Mission, points: readonly (readonly number[])[], sneak = false) {
+function walk(mission: Mission, points: readonly (readonly number[])[], sneak = false, timeLasers = false) {
+  const tolerance = timeLasers ? .13 : .12;
   for (const [x, z] of points) {
     const target: Point = { x, z };
-    for (let step = 0; step < 1250 && distance(mission.player, target) > .12; step++) {
+    for (let step = 0; step < 1250 && distance(mission.player, target) >= tolerance && mission.phase === 'active'; step++) {
       const gap = distance(mission.player, target);
-      mission.step({ ...idle, sneak, x: (x - mission.player.x) / gap, z: (z - mission.player.z) / gap }, dt);
+      const dx = (x - mission.player.x) / gap, dz = (z - mission.player.z) / gap;
+      const ahead = { x: mission.player.x + dx * .22, z: mission.player.z + dz * .22 };
+      const wait = timeLasers && mission.level.beams?.some(beam => inside(ahead, beam, .12) && mission.beamState(beam).state === 'live');
+      mission.step({ ...idle, sneak, x: wait ? 0 : dx, z: wait ? 0 : dz }, dt);
     }
-    assert.ok(distance(mission.player, target) <= .12, `Can't reach (${x}, ${z}) from (${mission.player.x.toFixed(2)}, ${mission.player.z.toFixed(2)})`);
+    assert.ok(distance(mission.player, target) < tolerance, `Can't reach (${x}, ${z}) from (${mission.player.x.toFixed(2)}, ${mission.player.z.toFixed(2)})`);
   }
 }
 
@@ -121,13 +126,119 @@ test('interaction resets after release, camera power stays off, and lift require
 });
 
 test('all authored patrols complete a loop without an obstacle trapping them', () => {
-  const mission = new Mission(saltRelay);
-  const indexes = mission.guards.map(guard => new Set([guard.index]));
-  for (let i = 0; i < 120 / dt; i++) {
-    mission.step({ ...idle, sneak: true }, dt);
-    mission.guards.forEach((guard, index) => indexes[index].add(guard.index));
+  for (const level of [saltRelay, blackwaterLock]) {
+    const mission = new Mission(level);
+    const indexes = mission.guards.map(guard => new Set([guard.index]));
+    for (let i = 0; i < 140 / dt; i++) {
+      mission.step(idle, dt);
+      mission.guards.forEach((guard, index) => indexes[index].add(guard.index));
+    }
+    mission.guards.forEach((guard, index) => assert.equal(indexes[index].size, guard.patrol.route.length, guard.patrol.name));
+    assert.equal(mission.phase, 'active');
+    assert.equal(mission.alerts, 0);
   }
-  mission.guards.forEach((guard, index) => assert.equal(indexes[index].size, guard.patrol.route.length, guard.patrol.name));
-  assert.equal(mission.phase, 'active');
+});
+
+const blackwaterWest = [[-15, 23.3], [-15, 15.9], [-18.3, 13.5], [-18.3, -7.6], [-20.9, -9.9]];
+const blackwaterEast = [[13.7, 23.3], [13.7, 20.2], [15, 20.2], [15, 15.8], [19.55, 15.9], [22.32, 16.98], [22.32, 7.05], [22.88, 7.05], [22.88, -8.1], [21.6, -9.5]];
+const blackwaterCrossing = [[-17.9, -7.2], [-8, -6.08], [-4.45, -5.84], [-4.45, -4.05], [5.95, -4.05], [5.95, -5.95], [8.4, -6.1], [14, -8.1], [21.4, -9.4]];
+const blackwaterRecords = [[13.5, -8.45], [8.75, -5.94], [5.4, -5.9], [5.3, -10.45], [.25, -11.7], [.25, -18.9], [.25, -24.5]];
+const blackwaterExit = [[3.85, -24.2], [3.85, -21.8], [6.55, -21.8], [9, -24.45], [18.9, -24.65]];
+
+const quietBlackwater: Level = { ...blackwaterLock, cameras: [], patrols: [], beams: [] };
+
+test('western Blackwater route opens Records and the east escape gate in sequence', () => {
+  const mission = new Mission(quietBlackwater);
+  const [records, escape] = blackwaterLock.gates!;
+  walk(mission, [[3, 23.3], [3, 19.4], [0, 19.4], [0, -11.7]]);
+  tick(mission, 2, { z: -1 });
+  assert.ok(mission.player.z > -13);
+  assert.equal(mission.gateOpen(records), false);
+  walk(mission, [[0, 19.4], [-15, 19.4], ...blackwaterWest.slice(1)], true);
+  tick(mission, 1.05, { interact: true });
+  assert.equal(mission.order, 'Tap the signal relays · 1/2');
+  assert.equal(mission.gateOpen(records), false);
+  walk(mission, blackwaterCrossing, true);
+  tick(mission, 1.05, { interact: true });
+  assert.equal(mission.gateOpen(records), true);
+  assert.equal(mission.gateOpen(escape), false);
+  walk(mission, blackwaterRecords, true);
+  tick(mission, 1.7, { interact: true });
+  assert.equal(mission.gateOpen(escape), true);
+  walk(mission, blackwaterExit, true);
+  tick(mission, .9, { interact: true });
+  assert.equal(mission.phase, 'escaped');
+});
+
+test('eastern service duct reaches relay B first and leaves relay A actionable', () => {
+  const mission = new Mission(quietBlackwater);
+  walk(mission, blackwaterEast, true);
+  tick(mission, 1.05, { interact: true });
+  assert.equal(mission.stationState(blackwaterLock.stations[1]), 'done');
+  assert.equal(mission.stationState(blackwaterLock.stations[0]), 'ready');
+  walk(mission, [...blackwaterCrossing].reverse().concat([[-20.9, -9.9]]), true);
+  tick(mission, 1.05, { interact: true });
+  assert.equal(mission.order, 'Copy the routing manifest');
+});
+
+test('Blackwater can be cleared without alerts with every guard and sensor active', () => {
+  const mission = new Mission(blackwaterLock);
+  const sneak = { sneak: true };
+  const use = { ...sneak, interact: true };
+  const westbound = [...blackwaterCrossing].reverse().concat([[-20.9, -9.9]]);
+  const vault = [[-18.3, -7.6], [-8, -6.08], [-4.45, -5.84], [-4.45, -10.7], [.25, -11.7], [.25, -14.15], [-4.38, -14.45], [-4.38, -24.26], [.25, -24.5]];
+  tick(mission, 30.5, sneak);
+  walk(mission, blackwaterEast, true, true);
+  tick(mission, 1.02, use);
+  tick(mission, 1.5, sneak);
+  walk(mission, westbound.slice(0, 6), true, true);
+  tick(mission, dt, { ...sneak, scramble: true });
+  walk(mission, westbound.slice(6), true, true);
+  tick(mission, 1.02, use);
+  tick(mission, .5, sneak);
+  walk(mission, vault.slice(0, 7), true, true);
+  tick(mission, dt, { ...sneak, scramble: true });
+  walk(mission, vault.slice(7), true, true);
+  tick(mission, 1.68, use);
+  walk(mission, blackwaterExit, true, true);
+  tick(mission, .88, use);
+  assert.equal(mission.phase, 'escaped');
   assert.equal(mission.alerts, 0);
+  assert.equal(mission.cameraPower, true);
+});
+
+test('laser phases advance, a local scrambler suppresses detection, and both resume on expiry', () => {
+  const [near] = blackwaterLock.beams!;
+  const far = { ...near, x: 19 };
+  const level: Level = { ...quietBlackwater, start: { x: 0, z: 18 }, beams: [near, far], cameras: [
+    { x: 0, z: 15, angle: 0, sweep: 0, phase: 0 }, { x: -16, z: 16, angle: 0, sweep: 0, phase: 0 },
+  ] };
+  const detected = new Mission(level);
+  assert.equal(detected.beamState(near).state, 'live');
+  assert.ok(tick(detected, .1).some(event => event.kind === 'alarm'));
+  tick(detected, 2.3);
+  assert.equal(detected.beamState(near).state, 'clear');
+  const scrambled = new Mission(level);
+  tick(scrambled, .1, { scramble: true });
+  assert.equal(scrambled.beamState(near).state, 'scrambled');
+  assert.equal(scrambled.beamState(far).state, 'live');
+  assert.equal(scrambled.alerts, 0);
+  assert.deepEqual(scrambled.cameras.map(camera => camera.disabled), [true, false]);
+  tick(scrambled, .1, { scramble: true });
+  assert.equal(scrambled.scramblers, 1);
+  tick(scrambled, 6.5);
+  assert.equal(scrambled.jam, undefined);
+  assert.ok(scrambled.cameras.every(camera => !camera.disabled));
+  assert.equal(scrambled.alerts, 1);
+});
+
+test('Blackwater power controls shut down laser grids and cameras for the run', () => {
+  const level: Level = { ...quietBlackwater, start: { x: -21.6, z: -20.3 }, beams: blackwaterLock.beams, cameras: blackwaterLock.cameras };
+  const mission = new Mission(level);
+  tick(mission, 1.08, { interact: true });
+  assert.equal(mission.cameraPower, false);
+  assert.ok(level.beams!.every(beam => mission.beamState(beam).state === 'offline'));
+  assert.ok(mission.cameras.every(camera => camera.disabled));
+  tick(mission, .1, { scramble: true });
+  assert.equal(mission.scramblers, 2);
 });

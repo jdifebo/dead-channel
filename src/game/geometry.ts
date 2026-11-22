@@ -1,4 +1,4 @@
-import type { Point, Rect, Wall } from './level.ts';
+import type { Point, Rect } from './level.ts';
 
 export const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.z - b.z);
 export const angleTo = (a: Point, b: Point) => Math.atan2(b.x - a.x, b.z - a.z);
@@ -9,7 +9,7 @@ export function inside(p: Point, area: Rect, padding = 0) {
   return Math.abs(p.x - area.x) < area.w / 2 + padding && Math.abs(p.z - area.z) < area.d / 2 + padding;
 }
 
-export function rayDistance(from: Point, dx: number, dz: number, range: number, walls: readonly Wall[]) {
+export function rayDistance(from: Point, dx: number, dz: number, range: number, walls: readonly Rect[]) {
   let nearest = range;
   for (const wall of walls) {
     const x = wall.x - from.x;
@@ -26,7 +26,7 @@ export function rayDistance(from: Point, dx: number, dz: number, range: number, 
   return nearest;
 }
 
-export function visible(from: Point, to: Point, walls: readonly Wall[]) {
+export function visible(from: Point, to: Point, walls: readonly Rect[]) {
   const length = distance(from, to);
   return length < .001 || rayDistance(from, (to.x - from.x) / length, (to.z - from.z) / length, length, walls) >= length - .02;
 }

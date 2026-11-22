@@ -16,8 +16,14 @@ export function drawMap(canvas: HTMLCanvasElement, mission: Mission, full: boole
   ctx.fillRect(0, 0, width, height);
   for (const zone of level.zones) rect(zone, zone.tone);
   for (const area of level.shadows) rect(area, '#0d1d2160');
+  for (const basin of level.basins ?? []) rect(basin, '#16363d');
   rect(level.duct, '#3c8178');
-  for (const wall of level.walls) rect(wall, wall.kind === 'concrete' ? '#87a09b' : '#83948a');
+  for (const wall of mission.sightWalls) rect(wall, wall.kind === 'concrete' ? '#87a09b' : '#83948a');
+  for (const gate of level.gates ?? []) if (!mission.gateOpen(gate)) rect(gate, '#a38e6d');
+  for (const beam of level.beams ?? []) {
+    const { state } = mission.beamState(beam);
+    if (state !== 'offline') rect({ ...beam, w: Math.max(.55, beam.w), d: Math.max(.55, beam.d) }, state === 'live' ? '#e97867' : '#78bba8');
+  }
   if (full) {
     ctx.font = '700 15px monospace';
     ctx.fillStyle = '#d8e6d9';
@@ -26,14 +32,15 @@ export function drawMap(canvas: HTMLCanvasElement, mission: Mission, full: boole
     for (const zone of level.zones) ctx.fillText(zone.name.toUpperCase(), x(zone), y(zone) + zone.d * scale * .38, zone.w * scale - 6);
   }
   for (const station of level.stations) {
-    if ((station.id === 'lift' && !mission.recording) || (station.id === 'recording' && mission.recording) || (station.id === 'power' && !mission.cameraPower)) continue;
+    const state = mission.stationState(station);
+    if (state === 'done' || (!full && state === 'locked')) continue;
     const size = full ? 7.0 : 2.6;
     ctx.save();
     ctx.translate(x(station), y(station));
     ctx.rotate(Math.PI / 4);
-    ctx.fillStyle = ctx.strokeStyle = station.id === 'power' ? '#b6f2df' : '#f6ca86';
+    ctx.fillStyle = ctx.strokeStyle = state === 'locked' ? '#a49f8a' : station.kind === 'power' ? '#b6f2df' : '#f6ca86';
     ctx.lineWidth = full ? 2.5 : 1;
-    if (station.id === 'power') ctx.strokeRect(-size, -size, size * 2, size * 2);
+    if (station.kind === 'power' || state === 'locked') ctx.strokeRect(-size, -size, size * 2, size * 2);
     else ctx.fillRect(-size, -size, size * 2, size * 2);
     ctx.restore();
   }

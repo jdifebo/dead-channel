@@ -1,9 +1,10 @@
 import * as T from 'three';
 import { clamp, rayDistance } from '../game/geometry.ts';
-import type { Level, Point } from '../game/level.ts';
+import type { Level, Point, Rect } from '../game/level.ts';
 import { cones } from '../game/mission.ts';
 import type { Agent, Mission } from '../game/mission.ts';
 import { Facility } from './facility.ts';
+import { SecurityView } from './security.ts';
 
 const ground = new T.Plane(new T.Vector3(0, 1, 0), 0);
 const standard = (color: string, roughness = .77) => new T.MeshStandardMaterial({ color, roughness });
@@ -103,14 +104,14 @@ class VisionCone {
     this.mesh.renderOrder = 1;
   }
 
-  update(observer: Point & { angle: number }, level: Level, awareness: number, disabled = false) {
+  update(observer: Point & { angle: number }, walls: Rect[], awareness: number, disabled = false) {
     this.mesh.visible = !disabled;
     if (disabled) return;
     this.mesh.position.set(observer.x, .033, observer.z);
     for (let i = 0; i <= coneSteps; i++) {
       const angle = observer.angle + (i / coneSteps * 2 - 1) * this.halfAngle;
       const x = Math.sin(angle), z = Math.cos(angle);
-      const far = rayDistance(observer, x, z, this.range, level.walls);
+      const far = rayDistance(observer, x, z, this.range, walls);
       this.vertices[(i + 1) * 3] = x * far;
       this.vertices[(i + 1) * 3 + 2] = z * far;
     }
@@ -126,6 +127,8 @@ export class SceneView {
   private readonly target = new T.Vector3();
   private readonly ray = new T.Raycaster();
   private readonly facility: Facility;
+  private readonly grids: SecurityView;
+  private readonly observer: ResizeObserver;
   private readonly operative = new Actor(true);
   private readonly guards: Actor[];
   private readonly guardCones: VisionCone[];
@@ -135,29 +138,34 @@ export class SceneView {
   private readonly projectiles: T.Mesh[] = [];
   private readonly ripples: T.Mesh<T.RingGeometry, T.MeshBasicMaterial>[] = [];
   private readonly cursor = new T.Mesh(ringGeo, new T.MeshBasicMaterial({ color: '#9cceca', transparent: true, opacity: .54, depthWrite: false }));
+  private readonly aim = new T.Line(new T.BufferGeometry().setFromPoints([new T.Vector3(), new T.Vector3()]),
+    new T.LineDashedMaterial({ color: '#a7d4ca', dashSize: .22, gapSize: .20, opacity: .34, transparent: true, depthWrite: false }));
   private readonly projectileMaterial = bright('#fff6ce');
 
-  constructor(private readonly host: HTMLElement, private readonly level: Level) {
+  constructor(private readonly host: HTMLElement, readonly level: Level) {
     this.renderer = new T.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = T.PCFShadowMap;
     this.renderer.toneMapping = T.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.24;
     this.renderer.setClearColor('#090f12');
-    this.renderer.domElement.setAttribute('aria-label', '3D view of Salt Relay');
+    this.renderer.domElement.setAttribute('aria-label', `3D view of ${level.name}`);
     this.host.append(this.renderer.domElement);
-    this.world.add(new T.HemisphereLight('#cbe6e8', '#4c4f41', 1.85));
-    const light = new T.DirectionalLight('#c4e0e3', 2.25);
+    const wet = !!level.basins?.length;
+    this.world.add(new T.HemisphereLight(wet ? '#a3e5dc' : '#cbe6e8', '#4c4f41', wet ? 1.54 : 1.85));
+    const light = new T.DirectionalLight(wet ? '#beedeb' : '#c4e0e3', wet ? 2.40 : 2.25);
     light.position.set(-9, 27, -9);
     light.castShadow = true;
     light.shadow.mapSize.set(2048, 2048);
-    Object.assign(light.shadow.camera, { left: -26, right: 26, top: 27, bottom: -27, near: 4, far: 66 });
+    const shadowSize = Math.max(level.bounds.w, level.bounds.d) / 2 + 5;
+    Object.assign(light.shadow.camera, { left: -shadowSize, right: shadowSize, top: shadowSize, bottom: -shadowSize, near: 4, far: 77 });
     light.shadow.camera.updateProjectionMatrix();
     light.shadow.normalBias = .035;
     light.shadow.bias = -.00025;
     this.world.add(light);
 
     this.facility = new Facility(level);
+    this.grids = new SecurityView(level);
     this.guards = level.patrols.map(() => new Actor(false));
     this.guardCones = level.patrols.map(() => new VisionCone(cones.guard.range, cones.guard.angle, '#efad58'));
     this.cameraCones = level.cameras.map(() => new VisionCone(cones.camera.range, cones.camera.angle, '#e96c59'));
@@ -176,14 +184,41 @@ export class SceneView {
       this.world.add(mount);
       return { base, light };
     });
-    this.world.add(this.facility.group, this.operative.root, this.effects,
+    this.world.add(this.facility.group, this.grids.group, this.operative.root, this.effects,
       ...this.guards.map(g => g.root), ...this.guardCones.map(cone => cone.mesh), ...this.cameraCones.map(cone => cone.mesh));
-    this.cursor.visible = false;
+    this.cursor.visible = this.aim.visible = false;
     this.cursor.scale.setScalar(.39);
-    this.world.add(this.cursor);
-    new ResizeObserver(() => this.resize()).observe(host);
+    this.aim.frustumCulled = false;
+    this.aim.geometry.setAttribute('lineDistance', new T.BufferAttribute(new Float32Array(2), 1));
+    this.world.add(this.cursor, this.aim);
+    this.observer = new ResizeObserver(() => this.resize());
+    this.observer.observe(host);
     this.resize();
     this.snap(level.start);
+  }
+
+  dispose() {
+    this.observer.disconnect();
+    const geometries = new Set<T.BufferGeometry>();
+    const materials = new Set<T.Material>();
+    const textures = new Set<T.Texture>();
+    this.world.traverse(object => {
+      if (object instanceof T.Mesh || object instanceof T.Line) {
+        geometries.add(object.geometry);
+        for (const surface of Array.isArray(object.material) ? object.material : [object.material]) materials.add(surface);
+      }
+      if (object instanceof T.InstancedMesh) object.dispose();
+      if (object instanceof T.DirectionalLight) object.shadow.dispose();
+    });
+    for (const surface of materials) {
+      if ('map' in surface && surface.map instanceof T.Texture) textures.add(surface.map);
+      surface.dispose();
+    }
+    for (const geometry of geometries) geometry.dispose();
+    for (const texture of textures) texture.dispose();
+    this.renderer.dispose();
+    this.renderer.forceContextLoss();
+    this.renderer.domElement.remove();
   }
 
   private resize() {
@@ -197,8 +232,15 @@ export class SceneView {
   }
 
   snap(point: Point) {
-    this.target.set(point.x * .79, 0, point.z - 3.1);
+    this.target.set(this.followX(point.x), 0, this.followZ(point.z));
     this.placeCamera();
+  }
+
+  private followX(x: number) { return this.level.basins?.length ? x * .91 : x * .79; }
+
+  private followZ(z: number) {
+    const { z: middle, d } = this.level.bounds;
+    return clamp(z - 2.55, middle - d / 2 + 2, middle + d / 2 - 6);
   }
 
   private placeCamera() {
@@ -217,27 +259,40 @@ export class SceneView {
   draw(mission: Mission, dt: number, pointer: Point | undefined, motion: boolean) {
     const { player } = mission;
     const follow = 1 - Math.exp(-dt * (motion ? 5.8 : 27));
-    this.target.x += (player.x * .79 - this.target.x) * follow;
-    this.target.z += (clamp(player.z - 2.55, -20, 16) - this.target.z) * follow;
+    this.target.x += (this.followX(player.x) - this.target.x) * follow;
+    this.target.z += (this.followZ(player.z) - this.target.z) * follow;
     this.placeCamera();
     this.operative.update(player, dt, mission.stance === 'sneak', mission.hidden);
     mission.guards.forEach((guard, i) => {
       this.guards[i].update(guard, dt, false, guard.awareness > .17 || guard.mode === 'chase');
-      this.guardCones[i].update(guard, this.level, guard.awareness);
+      this.guardCones[i].update(guard, mission.sightWalls, guard.awareness);
     });
     mission.cameras.forEach((camera, i) => {
-      this.cameraCones[i].update(camera, this.level, camera.awareness, camera.disabled);
+      this.cameraCones[i].update(camera, mission.sightWalls, camera.awareness, camera.disabled);
       this.security[i].base.rotation.y = camera.angle;
       this.security[i].light.material.color.set(camera.disabled ? '#465754' : '#ff755f');
     });
-    for (const [id, object] of this.facility.objectives) {
-      object.visible = id === 'power' ? mission.cameraPower : id === 'recording' ? !mission.recording : mission.recording;
+    for (const station of this.level.stations) {
+      const object = this.facility.objectives.get(station.id)!;
+      object.visible = mission.stationState(station) === 'ready';
       object.children[0].rotation.y = motion ? mission.elapsed * 1.35 : Math.PI / 4;
       object.position.y = 1.6 + (motion ? Math.sin(mission.elapsed * 3.6) * .10 : 0);
     }
+    this.facility.animate(motion ? mission.elapsed : 0);
+    this.grids.draw(mission, dt, motion);
     this.drawEffects(mission);
-    this.cursor.visible = !!pointer && mission.inventory > 0 && !mission.inDuct;
-    if (pointer) this.cursor.position.set(pointer.x, .062, pointer.z);
+    const aim = pointer && mission.inventory > 0 && !mission.inDuct ? mission.decoyLanding(pointer) : undefined;
+    this.cursor.visible = this.aim.visible = !!aim;
+    if (aim) {
+      this.cursor.position.set(aim.x, .062, aim.z);
+      const vertices = this.aim.geometry.attributes.position;
+      vertices.setXYZ(0, player.x, .07, player.z);
+      vertices.setXYZ(1, aim.x, .07, aim.z);
+      vertices.needsUpdate = true;
+      const distances = this.aim.geometry.attributes.lineDistance;
+      distances.setX(1, Math.hypot(aim.x - player.x, aim.z - player.z));
+      distances.needsUpdate = true;
+    }
     this.renderer.render(this.world, this.camera);
   }
 

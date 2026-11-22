@@ -91,7 +91,8 @@ export class MissionAudio {
         for (let i = 0; i < 3; i++) this.tone(340, 530, .32, .22, i * .40, 'triangle');
         break;
       case 'power': this.tone(420, 170, .36, .17, 0, 'triangle'); break;
-      case 'recording': this.tone(310, 440, .23, .15); this.tone(620, 680, .35, .13, .17); break;
+      case 'objective': this.tone(310, 440, .23, .15); this.tone(620, 680, .35, .13, .17); break;
+      case 'scramble': this.tick(1400, .28, .18); this.tone(235, 73, .54, .20, 0, 'triangle'); break;
       case 'escaped': [261, 330, 392, 524].forEach((note, i) => this.tone(note, note, .62, .15, i * .115)); break;
       case 'caught': this.tone(163, 47, .72, .35, 0, 'triangle'); break;
     }

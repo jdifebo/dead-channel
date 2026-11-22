@@ -4,8 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#090f12" />
-    <meta name="description" content="Infiltrate a coastal relay station and recover a missing recording in this browser-based 3D stealth game." />
-    <title>Dead Channel · Salt Relay</title>
+    <meta name="description" content="Infiltrate Salt Relay and Blackwater Lock in this browser-based 3D stealth campaign." />
+    <title>Dead Channel · Stealth Campaign</title>
   </head>
   <body>
     <main id="app">
@@ -20,7 +20,7 @@
           <h1 id="game-title">Dead<br />Channel<span>.</span></h1>
           <p>A distress call reached the coast at 02:14.<br class="desktop-break" /> Find the recording. Leave before they know it’s gone.</p>
           <div class="title-actions">
-            <button id="start" class="primary" type="button">Begin infiltration</button>
+            <button id="start" class="primary" type="button">Operations</button>
             <button id="title-guide" class="quiet-button" type="button">Field guide</button>
           </div>
         </div>
@@ -32,8 +32,8 @@
 
       <section id="hud" class="hud" aria-label="Mission display" hidden>
         <div class="mission-panel">
-          <div class="eyebrow"><i class="signal" aria-hidden="true"></i> SALT RELAY</div>
-          <strong id="objective">Recover the recording</strong>
+          <div class="eyebrow"><i class="signal" aria-hidden="true"></i><span id="mission-name">Salt Relay</span></div>
+          <strong id="objective" aria-live="polite">Recover the recording</strong>
           <span id="location">Intake</span>
         </div>
         <div id="status" class="status" data-alert="calm">
@@ -51,9 +51,11 @@
         <div id="interaction" class="interaction" hidden>
           <kbd>E</kbd><div><strong></strong><div class="progress"><span></span></div></div>
         </div>
+        <div id="beam-state" class="beam-state" hidden></div>
         <div class="equipment">
           <span class="eyebrow" id="stance">Walking</span>
           <div class="decoys"><span class="decoy-pips" aria-hidden="true"><i></i><i></i><i></i></span><span id="decoy-count">3 decoys</span></div>
+          <div id="scrambler" class="decoys scrambler" hidden><i></i><span></span> <kbd>F</kbd></div>
           <p class="desktop-only"><kbd>C</kbd> Sneak &nbsp; <kbd>Shift</kbd> Sprint &nbsp; <kbd>Q</kbd> Throw</p>
         </div>
         <button id="minimap-button" class="minimap" type="button" aria-label="Open facility plan">
@@ -64,6 +66,7 @@
           <div id="touch-move" class="stick" aria-label="Drag to move"><i></i></div>
           <div class="touch-actions">
             <button id="touch-decoy" type="button">Throw</button>
+            <button id="touch-scramble" type="button" hidden>Scramble</button>
             <button id="touch-sneak" type="button" aria-pressed="false">Sneak</button>
             <button id="touch-use" type="button">Hold to use</button>
           </div>
@@ -71,6 +74,33 @@
       </section>
 
       <section id="overlay" class="overlay" aria-label="Mission menu" hidden>
+        <div id="operations" class="card operations" hidden>
+          <header class="operations-header">
+            <div><div class="eyebrow"><i class="signal" aria-hidden="true"></i> DEAD CHANNEL</div><h2>Operations</h2></div>
+            <button class="quiet-button close-overlay" type="button">Back</button>
+          </header>
+          <div class="operations-layout">
+            <div class="operations-sidebar">
+              <p id="operations-progress" class="eyebrow"></p>
+              <div id="operations-roster" role="group" aria-label="Choose an operation"></div>
+            </div>
+            <div id="operations-brief" class="operations-brief" aria-labelledby="operations-name">
+              <div class="briefing-copy">
+                <div class="eyebrow" id="operations-subtitle"></div>
+                <h3 id="operations-name"></h3>
+                <p id="operations-story"></p>
+                <ol id="operations-tasks"></ol>
+                <p id="operations-loadout" hidden></p>
+                <button id="operation-start" class="primary" type="button">Begin infiltration</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <template id="operation-option">
+          <button class="operation-option" type="button" aria-pressed="false">
+            <span class="operation-number"></span><span><strong class="operation-name"></strong><span class="operation-score"></span></span>
+          </button>
+        </template>
         <div id="guide" class="card" hidden>
           <div class="eyebrow">FIELD GUIDE</div>
           <h2>Stay out of sight.</h2>
@@ -80,16 +110,18 @@
             <div><dt>Sneak / sprint</dt><dd><kbd>C</kbd> / <kbd>Shift</kbd></dd></div>
             <div><dt>Use equipment</dt><dd>Hold <kbd>E</kbd></dd></div>
             <div><dt>Throw a decoy</dt><dd>Click a location or press <kbd>Q</kbd></dd></div>
+            <div><dt>Blackwater scrambler</dt><dd><kbd>F</kbd> near cameras or lasers</dd></div>
             <div><dt>Facility plan / pause</dt><dd><kbd>Tab</kbd> / <kbd>Esc</kbd></dd></div>
           </dl>
           <p class="touch-guide">On touchscreens, drag the movement pad and use the action buttons.</p>
           <button class="primary close-overlay" type="button">Back</button>
         </div>
         <div id="pause-card" class="card" hidden>
-          <div class="eyebrow">SALT RELAY</div>
+          <div id="pause-name" class="eyebrow">Salt Relay</div>
           <h2>Mission paused.</h2>
           <div class="stack">
             <button class="primary close-overlay" type="button">Resume mission</button>
+            <button id="restart" class="quiet-button" type="button">Restart mission</button>
             <button id="pause-guide" class="quiet-button" type="button">Field guide</button>
             <button class="quiet-button sound-button" type="button" aria-pressed="false">Sound on</button>
             <button id="motion" class="quiet-button" type="button" aria-pressed="false">Reduced motion off</button>
@@ -97,16 +129,16 @@
           </div>
         </div>
         <div id="map-card" class="card map-card" hidden>
-          <header><div><div class="eyebrow">SALT RELAY</div><h2>Facility plan</h2></div><button class="quiet-button close-overlay" type="button">Close <kbd>Tab</kbd></button></header>
+          <header><div><div id="plan-name" class="eyebrow">Salt Relay</div><h2>Facility plan</h2></div><button class="quiet-button close-overlay" type="button">Close <kbd>Tab</kbd></button></header>
           <canvas id="full-map" width="840" height="700" aria-label="Facility map showing your position and mission equipment"></canvas>
-          <div class="map-key"><span><i></i> You</span><span><i></i> Objective</span><span><i></i> Camera power</span><span><i></i> Service duct</span></div>
+          <div class="map-key"><span><i></i> You</span><span><i></i> Objective</span><span><i></i> Power controls</span><span><i></i> Service duct</span><span id="map-beams" hidden><i></i> Laser grid</span></div>
         </div>
         <div id="results" class="card" hidden>
           <div class="eyebrow" id="result-label"></div>
           <h2 id="result-title"></h2>
           <p id="result-text"></p>
           <dl id="results-stats" class="results-stats"></dl>
-          <div class="result-actions"><button id="retry" class="primary" type="button">Replay mission</button><button class="quiet-button return-title" type="button">Return to title</button></div>
+          <div class="result-actions"><button id="next-operation" class="primary" type="button" hidden>Next operation</button><button id="retry" class="primary" type="button">Replay mission</button><button id="result-operations" class="quiet-button" type="button">Operations</button></div>
         </div>
         <div id="error-card" class="card" hidden>
           <div class="eyebrow">DISPLAY ERROR</div>

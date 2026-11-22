@@ -1,11 +1,11 @@
 import { angleDelta, angleTo, clamp, distance, inside, move, Navigation, rayDistance, visible } from './geometry.ts';
-import type { Level, Patrol, Point, Station } from './level.ts';
+import type { Beam, Gate, Level, Patrol, Point, Rect, Station, Wall } from './level.ts';
 
 export type Phase = 'active' | 'escaped' | 'caught';
 export type GuardMode = 'patrol' | 'investigate' | 'chase';
-export type EventKind = 'step' | 'throw' | 'impact' | 'suspicion' | 'alarm' | 'quiet' | 'power' | 'recording' | 'escaped' | 'caught';
-export interface MissionEvent { kind: EventKind; point?: Point; heavy?: boolean }
-export interface Input { x: number; z: number; sneak: boolean; sprint: boolean; interact: boolean; throwAt?: Point | true }
+export type EventKind = 'step' | 'throw' | 'impact' | 'suspicion' | 'alarm' | 'quiet' | 'power' | 'objective' | 'scramble' | 'escaped' | 'caught';
+export interface MissionEvent { kind: EventKind; point?: Point; heavy?: boolean; message?: string }
+export interface Input { x: number; z: number; sneak: boolean; sprint: boolean; interact: boolean; throwAt?: Point | true; scramble?: boolean }
 export interface Agent extends Point { angle: number; speed: number }
 export interface Guard extends Agent {
   patrol: Patrol; index: number; mode: GuardMode; wait: number; awareness: number;
@@ -15,6 +15,10 @@ export interface Camera extends Point { angle: number; awareness: number; disabl
 export interface Noise extends Point { age: number; range: number }
 export interface Decoy { from: Point; to: Point; age: number; duration: number }
 export interface Interaction { station: Station; progress: number; locked: boolean }
+export interface Scramble extends Point { until: number }
+export type BeamState = { state: 'live' | 'clear' | 'scrambled' | 'offline'; remaining: number };
+export const scrambleRadius = 9;
+export const scrambleSeconds = 6.5;
 
 const GUARD_RANGE = 9.6;
 const CAMERA_RANGE = 11.2;
@@ -32,6 +36,7 @@ export class Mission {
   readonly decoys: Decoy[] = [];
   readonly noises: Noise[] = [];
   readonly events: MissionEvent[] = [];
+  private readonly completed = new Set<string>();
   phase: Phase = 'active';
   elapsed = 0;
   stance: 'walk' | 'sneak' | 'sprint' = 'walk';
@@ -39,26 +44,76 @@ export class Mission {
   inDuct = false;
   ductBlocked = false;
   exposure = 0;
-  recording = false;
   cameraPower = true;
   inventory = 3;
+  scramblers: number;
+  jam: Scramble | undefined;
   alarm = 0;
   alerts = 0;
   interaction: Interaction | undefined;
-  private readonly navigation: Navigation;
-  private readonly guardWalls;
+  sightWalls: Wall[] = [];
+  private walkWalls: Rect[] = [];
+  private guardWalls: Rect[] = [];
+  private offsetWalls: Rect[] = [];
+  private navigation!: Navigation;
   private stepDistance = 0;
   private suspected = false;
 
   constructor(level: Level) {
     this.level = level;
+    this.scramblers = level.scramblers ?? 0;
     this.player = { ...level.start, angle: Math.PI, speed: 0 };
     this.guards = level.patrols.map(patrol => ({ ...patrol.route[0], patrol, index: 1, mode: 'patrol',
       angle: angleTo(patrol.route[0], patrol.route[1]), speed: 0, awareness: 0, wait: patrol.delay ?? 0,
       destination: patrol.route[1], path: [], replan: 0, memory: 0 }));
     this.cameras = level.cameras.map(camera => ({ ...camera, awareness: 0, disabled: false }));
-    this.guardWalls = [...level.walls, level.duct];
-    this.navigation = new Navigation(level.bounds, this.guardWalls, GUARD_RADIUS);
+    this.updateWalls();
+  }
+
+  get order() {
+    const order = this.level.orders.find(step => !this.hasAll(step.until));
+    if (!order) return 'Extraction complete';
+    const progress = order.until.length > 1 ? ` · ${order.until.filter(id => this.completed.has(id)).length}/${order.until.length}` : '';
+    return `${order.text}${progress}`;
+  }
+
+  // Retained for callers that track the original Salt Relay objective.
+  get recording() { return this.completed.has('recording'); }
+
+  stationState(station: Station) {
+    if (this.completed.has(station.id)) return 'done';
+    return this.hasAll(station.requires) ? 'ready' : 'locked';
+  }
+
+  gateOpen(gate: Gate) { return this.hasAll(gate.requires); }
+
+  decoyLanding(target: Point): Point | undefined {
+    const { player } = this;
+    const angle = angleTo(player, target);
+    const dx = Math.sin(angle), dz = Math.cos(angle);
+    const range = Math.min(9, distance(player, target));
+    const travel = rayDistance(player, dx, dz, range, this.walkWalls) - .27;
+    if (travel >= .65) return { x: player.x + dx * travel, z: player.z + dz * travel };
+  }
+
+  beamState(beam: Beam): BeamState {
+    if (!this.cameraPower) return { state: 'offline', remaining: 0 };
+    if (this.inScramble(beam)) return { state: 'scrambled', remaining: this.jam!.until - this.elapsed };
+    const phase = (this.elapsed + beam.phase) % beam.period;
+    return phase < beam.live ? { state: 'live', remaining: beam.live - phase } : { state: 'clear', remaining: beam.period - phase };
+  }
+
+  private hasAll(ids?: string[]) { return ids?.every(id => this.completed.has(id)) ?? true; }
+
+  private inScramble(point: Point) { return !!this.jam && distance(this.jam, point) <= scrambleRadius; }
+
+  private updateWalls() {
+    this.sightWalls = [...this.level.walls, ...(this.level.gates ?? []).filter(gate => !this.gateOpen(gate))];
+    this.walkWalls = [...this.sightWalls, ...(this.level.basins ?? [])];
+    this.guardWalls = [...this.walkWalls, this.level.duct];
+    this.offsetWalls = this.guardWalls.map(w => ({ ...w, w: w.w + GUARD_RADIUS * 2, d: w.d + GUARD_RADIUS * 2 }));
+    this.navigation = new Navigation(this.level.bounds, this.guardWalls, GUARD_RADIUS);
+    for (const guard of this.guards) guard.replan = 0;
   }
 
   step(input: Input, dt: number) {
@@ -68,8 +123,15 @@ export class Mission {
     const previousAlarm = this.alarm;
     this.alarm = Math.max(0, this.alarm - dt);
     this.movePlayer(input, dt);
+    this.updateScramble(input.scramble);
     this.updateDecoys(input, dt);
     this.updateCameras(dt);
+    for (const beam of this.level.beams ?? []) {
+      if (inside(this.player, beam, .12) && this.beamState(beam).state === 'live') {
+        this.raiseAlarm(this.player, undefined, 'Laser trip. Break sight and change direction.');
+        break;
+      }
+    }
     for (const guard of this.guards) {
       this.updateGuard(guard, dt);
       if (this.phase !== 'active') break;
@@ -97,7 +159,7 @@ export class Mission {
       const start = { x: player.x, z: player.z };
       const entering = inside({ x: player.x + dx, z: player.z + dz }, this.level.duct, PLAYER_RADIUS);
       this.ductBlocked = !input.sneak && !this.inDuct && entering;
-      move(player, dx, dz, this.ductBlocked ? this.guardWalls : this.level.walls, PLAYER_RADIUS);
+      move(player, dx, dz, this.ductBlocked ? this.guardWalls : this.walkWalls, PLAYER_RADIUS);
       this.turn(player, Math.atan2(input.x, input.z), 19, dt);
       player.speed = distance(player, start) / dt;
       this.stepDistance += distance(player, start);
@@ -114,16 +176,22 @@ export class Mission {
     while (this.noises[0]?.age > 1.0) this.noises.shift();
   }
 
+  private updateScramble(trigger?: boolean) {
+    if (this.jam && this.jam.until <= this.elapsed) this.jam = undefined;
+    if (trigger && this.scramblers > 0 && !this.jam && !this.inDuct && this.cameraPower) {
+      this.scramblers--;
+      this.jam = { x: this.player.x, z: this.player.z, until: this.elapsed + scrambleSeconds };
+      this.events.push({ kind: 'scramble' });
+    }
+  }
+
   private updateDecoys(input: Input, dt: number) {
     if (input.throwAt && this.inventory > 0 && !this.inDuct) {
       const target = input.throwAt === true ? { x: this.player.x + Math.sin(this.player.angle) * 7, z: this.player.z + Math.cos(this.player.angle) * 7 } : input.throwAt;
-      const angle = angleTo(this.player, target);
-      const range = Math.min(9, distance(this.player, target));
-      const dx = Math.sin(angle), dz = Math.cos(angle);
-      const travel = Math.max(0, rayDistance(this.player, dx, dz, range, this.level.walls) - .27);
-      if (travel >= .65) {
+      const landing = this.decoyLanding(target);
+      if (landing) {
         this.inventory--;
-        this.decoys.push({ from: { ...this.player }, to: { x: this.player.x + dx * travel, z: this.player.z + dz * travel }, age: 0, duration: .23 + travel * .049 });
+        this.decoys.push({ from: { ...this.player }, to: landing, age: 0, duration: .23 + distance(this.player, landing) * .049 });
         this.events.push({ kind: 'throw' });
       }
     }
@@ -141,7 +209,7 @@ export class Mission {
     if (decoy) this.events.push({ kind: 'impact', point: at });
     for (const guard of this.guards) {
       if (guard.mode === 'chase') continue;
-      const reach = visible(at, guard, this.level.walls) ? range : range * .5;
+      const reach = visible(at, guard, this.sightWalls) ? range : range * .5;
       if (distance(at, guard) <= reach) this.redirect(guard, at, 'investigate', decoy ? 6 : 3.5);
     }
   }
@@ -150,16 +218,16 @@ export class Mission {
     const gap = distance(observer, this.player);
     if (this.inDuct || gap > range || (this.hidden && gap > close)) return false;
     if (gap > close && Math.abs(angleDelta(observer.angle, angleTo(observer, this.player))) > halfAngle) return false;
-    return visible(observer, this.player, this.level.walls);
+    return visible(observer, this.player, this.sightWalls);
   }
 
   private updateCameras(dt: number) {
     this.cameras.forEach((camera, i) => {
       const spec = this.level.cameras[i];
-      camera.disabled = !this.cameraPower;
+      camera.disabled = !this.cameraPower || this.inScramble(camera);
       if (!camera.disabled) camera.angle = spec.angle + Math.sin(this.elapsed * .86 + spec.phase) * spec.sweep;
       const seesPlayer = !camera.disabled && this.sees(camera, CAMERA_RANGE, CAMERA_ANGLE, .3);
-      camera.awareness = clamp(camera.awareness + (seesPlayer ? .99 : -.82) * dt, 0, 1);
+      camera.awareness = camera.disabled ? 0 : clamp(camera.awareness + (seesPlayer ? .99 : -.82) * dt, 0, 1);
       if (camera.awareness >= 1) this.raiseAlarm(this.player);
     });
   }
@@ -215,8 +283,7 @@ export class Mission {
     guard.replan -= dt;
     if (guard.replan <= 0) {
       guard.replan = guard.mode === 'chase' ? .37 : .96;
-      const offsetWalls = this.guardWalls.map(w => ({ ...w, w: w.w + GUARD_RADIUS * 2, d: w.d + GUARD_RADIUS * 2, h: 1, kind: 'concrete' as const }));
-      guard.path = visible(guard, guard.destination, offsetWalls) ? [guard.destination] : this.navigation.path(guard, guard.destination);
+      guard.path = visible(guard, guard.destination, this.offsetWalls) ? [guard.destination] : this.navigation.path(guard, guard.destination);
     }
     while (guard.path.length && distance(guard, guard.path[0]) < .17) guard.path.shift();
     const next = guard.path[0];
@@ -241,10 +308,10 @@ export class Mission {
     guard.replan = 0;
   }
 
-  private raiseAlarm(point: Point, spotter?: Guard) {
+  private raiseAlarm(point: Point, spotter?: Guard, message?: string) {
     if (this.alarm <= 0) {
       this.alerts++;
-      this.events.push({ kind: 'alarm' });
+      this.events.push({ kind: 'alarm', message });
       for (const guard of this.guards) {
         if (guard !== spotter && distance(guard, point) < 13) this.redirect(guard, point, 'investigate', 6);
       }
@@ -255,16 +322,19 @@ export class Mission {
 
   private updateInteraction(held: boolean, dt: number) {
     const station = this.level.stations.find(s => distance(this.player, s) < 1.65 &&
-      !(s.id === 'power' && !this.cameraPower) && !(s.id === 'recording' && this.recording));
+      this.stationState(s) !== 'done' && visible(this.player, s, this.sightWalls));
     if (!station) { this.interaction = undefined; return; }
-    const locked = station.id === 'lift' && !this.recording;
+    const locked = this.stationState(station) === 'locked';
     const progress = held && !locked ? (this.interaction?.station === station ? this.interaction.progress : 0) + dt / station.seconds : 0;
     this.interaction = { station, progress, locked };
     if (progress < 1) return;
-    if (station.id === 'power') this.cameraPower = false;
-    if (station.id === 'recording') this.recording = true;
-    if (station.id === 'lift') this.phase = 'escaped';
-    this.events.push({ kind: station.id === 'lift' ? 'escaped' : station.id });
+    this.completed.add(station.id);
+    if (station.kind === 'power') this.cameraPower = false;
+    if (station.kind === 'extract') this.phase = 'escaped';
+    const opened = this.level.gates?.filter(gate => gate.requires.includes(station.id) && this.gateOpen(gate));
+    if (opened?.length) this.updateWalls();
+    const message = opened?.find(gate => gate.radio)?.radio ?? station.radio;
+    this.events.push({ kind: station.kind === 'extract' ? 'escaped' : station.kind, message });
     this.interaction = undefined;
   }
 }

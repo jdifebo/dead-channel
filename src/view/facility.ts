@@ -1,5 +1,5 @@
 import * as T from 'three';
-import type { Level, Wall } from '../game/level.ts';
+import type { Level, Rect, Wall } from '../game/level.ts';
 
 const material = (color: string, roughness = .77, metalness = .15) => new T.MeshStandardMaterial({ color, roughness, metalness });
 const glow = (color: string) => new T.MeshBasicMaterial({ color });
@@ -67,12 +67,39 @@ const mats = {
 
 const flat = new T.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
 const box = new T.BoxGeometry(1, 1, 1);
+const pumpCylinder = new T.CylinderGeometry(1, 1, 1, 24);
+
+function waterMaterial() {
+  return new T.ShaderMaterial({
+    uniforms: { time: { value: 0 } },
+    vertexShader: `varying vec2 uvSurface; varying vec2 basinPosition;
+      void main() { uvSurface=uv; basinPosition=(modelMatrix*vec4(position,1.)).xz;
+        gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
+    fragmentShader: `uniform float time; varying vec2 uvSurface; varying vec2 basinPosition;
+      void main() {
+        vec2 p=basinPosition;
+        float a=sin(p.x*2.2+p.y*1.6+time*.55+sin(p.y*3.3-time*.67));
+        float b=cos(p.y*12.6-p.x*1.85-time*1.5+cos(p.x*2.1+time*.47));
+        vec2 pump=(uvSurface-vec2(.5,.69))*vec2(1.,1.5);
+        float radius=length(pump);
+        float waves=pow(.5+.5*cos(radius*105.-time*2.+a*.7),10.)*exp(-4.8*radius);
+        float reflection=exp(-abs(uvSurface.x-.32-a*.019)*24.)*(.22+.78*pow(max(b,0.),4.));
+        vec2 edges=min(uvSurface,1.-uvSurface);
+        float rim=smoothstep(0.,.11,min(edges.x,edges.y));
+        vec3 color=mix(vec3(.008,.020,.026),vec3(.017,.074,.085),rim);
+        color+=vec3(.042,.15,.13)*waves*rim+vec3(.064,.19,.17)*reflection;
+        gl_FragColor=vec4(color,1.);
+        #include <colorspace_fragment>
+      }`,
+  });
+}
 
 interface Block { x: number; y: number; z: number; w: number; h: number; d: number; angle: number }
 
 export class Facility {
   readonly group = new T.Group();
   readonly objectives = new Map<string, T.Group>();
+  private readonly water = waterMaterial();
   private readonly blocks = new Map<T.Material, Block[]>();
   private readonly pool = radialTexture();
 
@@ -83,9 +110,12 @@ export class Facility {
     this.addFloor(level);
     for (const wall of level.walls) this.addWall(wall);
     this.addFixtures(level);
+    for (const pool of level.basins ?? []) this.addBasin(pool);
     this.addStations(level);
     this.buildBlocks();
   }
+
+  animate(time: number) { this.water.uniforms.time.value = time; }
 
   private floor(x: number, z: number, w: number, d: number, surface: T.Material, height: number) {
     const panel = new T.Mesh(flat, surface);
@@ -180,15 +210,10 @@ export class Facility {
   }
 
   private addFixtures(level: Level) {
-    const pools = [
-      [-.1, 18.9, 9.5, '#63a4aa'], [-11.6, 12.65, 6, '#a58042'], [.1, 12.7, 6.8, '#83acac'], [11.7, 12.65, 7, '#61a192'],
-      [-10.9, 1.3, 7.7, '#b39352'], [0, 3.8, 8.5, '#75a8ac'], [15.2, 6.65, 6.8, '#63cead'], [7.0, -6.7, 8, '#68a799'],
-      [-10.7, -10.1, 6, '#a78046'], [0, -10.3, 8, '#89c1c1'], [11.55, -11.35, 7, '#75a2cb'], [-13.1, -20, 6, '#8eab9a'], [0, -20.3, 7.6, '#80bfc1'], [11.7, -17.5, 8, '#709cae'],
-    ] as const;
-    for (const [x, z, width, color] of pools) this.floor(x, z, width, width,
+    for (const { x, z, width, color } of level.lighting) this.floor(x, z, width, width,
       new T.MeshBasicMaterial({ color, map: this.pool, transparent: true, depthWrite: false, blending: T.AdditiveBlending, opacity: .28 }), .022);
 
-    for (const [x, z, width] of [[-11.4, 14, 2.35], [0, 14, 3.2], [11.4, 14, 2.4], [-11.15, -11, 3.4], [-.12, -11, 3.8], [11.35, -11, 1.85]]) {
+    for (const { x, z, width } of level.doorways) {
       this.block(mats.black, x, .026, z, width, .052, .65);
       for (let offset = -width / 2 + .17; offset < width / 2 - .08; offset += .39) this.block(mats.paint, x + offset, .058, z, .16, .012, .47, -.42);
       for (const side of [-1, 1]) {
@@ -197,10 +222,6 @@ export class Facility {
       }
     }
 
-    for (let z = -9.4; z < 13.2; z += .95) {
-      this.block(mats.greyPaint, -3.08, .014, z, .048, .021, .51);
-      this.block(mats.greyPaint, 3.08, .014, z, .048, .021, .51);
-    }
     const { duct } = level;
     this.block(mats.black, duct.x, .018, duct.z, duct.w, .035, duct.d);
     for (let z = duct.z - duct.d / 2 + .13; z < duct.z + duct.d / 2; z += .36) this.block(mats.grate, duct.x, .044, z, duct.w - .1, .028, .09);
@@ -210,24 +231,64 @@ export class Facility {
       this.block(mats.mint, duct.x, 1.048, z, .88, .026, .09);
     }
 
-    for (const [x, z, length] of [[-16.47, 1.4, 23], [16.47, 1.4, 23], [16.47, -17, 7], [-16.47, -17, 7]]) {
+    const { w, d } = level.bounds;
+    const edge = w / 2 - .53;
+    const lane = level.id === 'salt-relay' ? 3.08 : 4.65;
+    for (let z = -d * .214; z < d * .30; z += .95) {
+      this.block(mats.greyPaint, -lane, .014, z, .048, .021, .51);
+      this.block(mats.greyPaint, lane, .014, z, .048, .021, .51);
+    }
+    for (const [x, z, length] of [[-edge, 1.4, d * .52], [edge, 1.4, d * .52], [edge, -d * .386, 7], [-edge, -d * .386, 7]]) {
       for (let i = 0; i < 3; i++) this.block(mats.grate, x + (x < 0 ? 1 : -1) * i * .13, .27 + i * .17, z, .098, .1, length);
       for (let dz = -length / 2 + .8; dz < length / 2; dz += 1.65) this.block(mats.black, x, .26, z + dz, .45, .52, .11);
     }
-    for (let i = 0; i < 11; i++) this.block(mats.grate, 0, .034, 20.65 + i * .084, 5.1, .031, .04);
-    this.block(mats.panel, 0, .1, 21.35, 5.3, .2, .6);
-    this.block(mats.mint, 0, .211, 21.2, 2.8, .019, .058);
+    const hatchX = level.id === 'salt-relay' ? 0 : level.start.x;
+    for (let i = 0; i < 11; i++) this.block(mats.grate, hatchX, .034, d / 2 - 1.35 + i * .084, 5.1, .031, .04);
+    this.block(mats.panel, hatchX, .1, d / 2 - .65, 5.3, .2, .6);
+    this.block(mats.mint, hatchX, .211, d / 2 - .8, 2.8, .019, .058);
+  }
+
+  private addBasin({ x, z, w, d }: Rect) {
+    this.floor(x, z, w, d, this.water, .028);
+    for (const sign of [-1, 1]) {
+      const rim = x + sign * (w / 2 - .08);
+      this.block(mats.floorEdge, rim, .09, z, .22, .18, d + .12);
+      this.block(mats.grate, rim, .188, z, .13, .025, d);
+      this.block(mats.floorEdge, x, .08, z + sign * (d / 2 - .07), w, .16, .23);
+      for (let q = -d * .43; q < d * .45; q += .65) {
+        this.block(mats.paint, rim + sign * .048, .203, z + q, .13, .012, .28, -.34 * sign);
+      }
+    }
+    if (w < 4) return;
+    // The pump and its service catwalk sit over the inaccessible water.
+    const rust = material('#6e4940', .78, .44);
+    const pump = (surface: T.Material, xx: number, yy: number, zz: number, diameter: number, height: number, angle = 0) => {
+      const mesh = new T.Mesh(pumpCylinder, surface);
+      mesh.position.set(xx, yy, zz);
+      mesh.scale.set(diameter / 2, height, diameter / 2);
+      mesh.rotation.z = angle;
+      mesh.castShadow = true;
+      this.group.add(mesh);
+    };
+    const machineryZ = z - d * .19;
+    pump(rust, x, .78, machineryZ, .43, w - .44, Math.PI / 2);
+    pump(mats.panel, x, .71, machineryZ, 1.12, 1.42);
+    pump(mats.grate, x, 1.46, machineryZ, 1.35, .15);
+    pump(mats.rack, x, 1.62, machineryZ, .76, .23);
+    this.block(mats.rack, x, .11, machineryZ, w - .38, .18, .95);
+    for (let q = -w / 2 + .34; q < w / 2 - .20; q += .26) this.block(mats.grate, x + q, .214, machineryZ, .065, .025, .88);
+    for (const side of [-1, 1]) this.block(mats.mint, x + side * (w / 2 - .42), .248, machineryZ, .12, .035, .65);
   }
 
   private addStations(level: Level) {
-    for (const { id, x, z } of level.stations) {
-      if (id === 'lift') {
+    for (const { id, kind, x, z } of level.stations) {
+      if (kind === 'extract') {
         this.block(mats.rack, x, .83, z - 1.02, 3.7, 1.66, .42);
         this.block(mats.wallTop, x, 1.76, z - 1.02, 3.86, .22, .58);
         for (const side of [-1, 1]) this.block(mats.grate, x + side * 1.82, .82, z - 1.02, .26, 1.64, .54);
         this.block(mats.black, x, .036, z - .2, 3.68, .075, 1.16);
       } else {
-        const width = id === 'recording' ? 2.8 : 1.15;
+        const width = id === 'recording' || id === 'manifest' ? 2.8 : 1.15;
         this.block(mats.rack, x, .45, z - .65, width, .9, .8);
         this.block(mats.panel, x, .91, z - .65, width + .08, .11, .89);
         this.block(mats.black, x, 1.11, z - .8, width * .58, .3, .26);
@@ -235,10 +296,10 @@ export class Facility {
         for (let i = 0; i < 5; i++) this.block(i < 2 ? mats.amber : mats.grate, x - .24 + i * .12, .979, z - .36, .065, .025, .07);
       }
       const marker = new T.Group();
-      const diamond = new T.Mesh(new T.OctahedronGeometry(.255), id === 'power' ? mats.mint : mats.amber);
+      const diamond = new T.Mesh(new T.OctahedronGeometry(.255), kind === 'power' ? mats.mint : mats.amber);
       diamond.rotation.y = Math.PI / 4;
       marker.add(diamond);
-      const ring = new T.Mesh(new T.RingGeometry(.46, .49, 4).rotateX(-Math.PI / 2).rotateY(Math.PI / 4), new T.MeshBasicMaterial({ color: id === 'power' ? '#95e7e0' : '#efbd6a', side: T.DoubleSide }));
+      const ring = new T.Mesh(new T.RingGeometry(.46, .49, 4).rotateX(-Math.PI / 2).rotateY(Math.PI / 4), new T.MeshBasicMaterial({ color: kind === 'power' ? '#95e7e0' : '#efbd6a', side: T.DoubleSide }));
       ring.position.y = -.12;
       marker.add(ring);
       marker.position.set(x, 1.58, z);
